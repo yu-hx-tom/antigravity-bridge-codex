@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="bridge-key" content="__BRIDGE_UI_KEY__">
+  <title>Antigravity Codex Bridge</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="返回顶部">
+      <span class="brand-mark">A/G</span>
+      <span>LOCAL BRIDGE <small>0.1</small></span>
+    </a>
+    <div class="top-status">
+      <span class="signal" id="topSignal"></span>
+      <span id="topStatus">正在读取本地状态</span>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero reveal">
+      <div class="hero-copy">
+        <p class="kicker">ANTIGRAVITY / CODEX / LOOPBACK ONLY</p>
+        <h1>把可用模型，<br><em>接到本地 Codex。</em></h1>
+        <p class="lede">管理 Google OAuth 账号、查看上游报告额度，并安全备份后临时切换 Codex 到 API Service。</p>
+        <div class="safety-row">
+          <span>127.0.0.1 ONLY</span>
+          <span>CONFIG + AUTH 自动备份</span>
+          <span>会话粘滞 + 自动故障转移</span>
+        </div>
+      </div>
+
+      <aside class="launch-card">
+        <div class="launch-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
+        <p class="launch-label">ONE SWITCH START</p>
+        <button class="launch-button" id="launchCodex" type="button">
+          <span>应用 API Service 配置</span>
+          <small>SAFE SINGLE-INSTANCE SWITCH</small>
+        </button>
+        <div class="launch-meta">
+          <span id="launchModel">等待模型同步</span>
+          <span id="launchEndpoint">127.0.0.1:8317</span>
+        </div>
+      </aside>
+    </section>
+
+    <section class="metrics reveal delay-1" aria-label="运行概览">
+      <article><span>CORE</span><strong id="metricCore">--</strong><small id="metricCoreSub">CLIProxyAPI</small></article>
+      <article><span>ACCOUNTS</span><strong id="metricAccounts">0</strong><small>可管理账号</small></article>
+      <article><span>MODELS</span><strong id="metricModels">0</strong><small>代理可见模型</small></article>
+      <article><span>CODEX ROUTE</span><strong id="metricProfile">SAFE</strong><small id="metricProfileSub">尚未切换</small></article>
+    </section>
+
+    <section class="workspace reveal delay-2">
+      <div class="section-heading">
+        <div><span class="section-no">01</span><p class="eyebrow">PROXY CORE</p><h2>本地核心</h2></div>
+        <p>核心只监听回环地址。首次使用先安装，然后添加账号。</p>
+      </div>
+      <div class="core-grid">
+        <article class="panel core-panel">
+          <div class="panel-top">
+            <div class="core-icon" id="coreIcon"><span></span></div>
+            <div><p class="panel-label">CLIProxyAPI</p><h3 id="coreStatus">未检测</h3></div>
+            <span class="status-pill" id="corePill">CHECKING</span>
+          </div>
+          <div class="endpoint-box">
+            <span>OPENAI COMPATIBLE ENDPOINT</span>
+            <code id="endpointValue">http://127.0.0.1:8317/v1</code>
+          </div>
+          <div class="button-row">
+            <button class="button primary" id="toggleCore" type="button">启动服务</button>
+            <button class="button ghost" id="installCore" type="button">安装 / 更新核心</button>
+          </div>
+          <p class="micro" id="binaryPath">核心路径：尚未配置</p>
+        </article>
+
+        <article class="panel route-panel">
+          <p class="panel-label">REQUEST ROUTE</p>
+          <div class="route-map">
+            <div><b>Codex</b><span>Responses API</span></div>
+            <i></i>
+            <div><b>Local Proxy</b><span>Session affinity</span></div>
+            <i></i>
+            <div><b>Antigravity</b><span>Google OAuth</span></div>
+          </div>
+          <div class="notice compact">
+            <b>这是非官方接入路径</b>
+            <span>请求会到 Antigravity 使用的 Google 内部接口，并非公开 Gemini API。建议只用专门的测试账号。</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="workspace reveal delay-3">
+      <div class="section-heading heading-actions">
+        <div><span class="section-no">02</span><p class="eyebrow">OAUTH ACCOUNTS</p><h2>账号与额度</h2></div>
+        <div class="button-row">
+          <button class="button ghost" id="refreshQuota" type="button">刷新额度</button>
+          <button class="button accent" id="addAccount" type="button">+ 登录 Google 账号</button>
+        </div>
+      </div>
+      <div class="notice">
+        <b>额度百分比与实际健康是两套信号</b>
+        <span><code>fetchAvailableModels</code> 可能仍显示有额度，但生成请求已被 429 限流；账号卡会同时显示代理运行状态与上游报告值。</span>
+      </div>
+      <div class="account-list" id="accountList">
+        <div class="empty-state"><span>02</span><h3>还没有账号</h3><p>启动核心后，点击“登录 Google 账号”完成本地 OAuth。</p></div>
+      </div>
+    </section>
+
+    <section class="workspace reveal delay-4">
+      <div class="section-heading">
+        <div><span class="section-no">03</span><p class="eyebrow">MODEL CATALOG</p><h2>Codex 模型</h2></div>
+        <p>先在桥接器目录生成配置，再备份并替换默认 Codex 的 config.toml 与 auth.json；需要时可一键原样恢复。</p>
+      </div>
+      <div class="model-layout">
+        <article class="panel model-picker">
+          <label for="modelSelect">默认启动模型</label>
+          <select id="modelSelect"><option value="">等待服务启动</option></select>
+          <div class="button-row">
+            <button class="button primary" id="prepareProfile" type="button">仅生成 Profile</button>
+            <button class="button ghost" id="restoreCodex" type="button" disabled>恢复原配置</button>
+          </div>
+          <p class="micro" id="profilePath">API Service 配置尚未应用</p>
+        </article>
+        <article class="panel model-cloud">
+          <div class="panel-top simple"><p class="panel-label">AVAILABLE THROUGH PROXY</p><strong id="modelCount">0</strong></div>
+          <div class="chips" id="modelChips"><span>尚无模型</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="workspace settings-section reveal">
+      <details>
+        <summary><span><b>04</b> 高级设置</span><small>端口、核心路径与 Codex 桌面端路径</small></summary>
+        <form id="settingsForm" class="settings-grid">
+          <label class="wide"><span>Codex Home（桌面端实际配置目录）</span><input id="codexHome" name="codexHome" type="text" placeholder="D:\codex-home"></label>
+          <label class="wide"><span>Codex 桌面端路径（可留空自动检测）</span><input id="codexAppPath" name="codexAppPath" type="text" placeholder="...\\app\\ChatGPT.exe"></label>
+          <label><span>代理端口</span><input id="proxyPort" name="proxyPort" type="number" min="1024" max="65535"></label>
+          <label><span>额度检查间隔（分钟）</span><input id="quotaInterval" name="quotaIntervalMinutes" type="number" min="5" max="60"></label>
+          <label class="wide"><span>CLIProxyAPI 核心路径</span><input id="proxyBinary" name="proxyBinary" type="text" placeholder="留空则自动检测"></label>
+          <div class="wide form-footer"><button class="button primary" type="submit">保存设置</button><span id="dataPath"></span></div>
+        </form>
+      </details>
+    </section>
+
+    <section class="workspace diagnostics reveal">
+      <div class="section-heading">
+        <div><span class="section-no">05</span><p class="eyebrow">DIAGNOSTICS</p><h2>最近运行记录</h2></div>
+        <p>只保留本次管理进程最近 80 条；常见令牌字段会被脱敏。</p>
+      </div>
+      <div class="log-window" id="logWindow"><p><time>--:--:--</time><span>APP</span> 等待运行事件</p></div>
+    </section>
+  </main>
+
+  <footer><span>ANTIGRAVITY CODEX BRIDGE</span><span>LOCAL-FIRST / SAFE SINGLE-INSTANCE TAKEOVER</span></footer>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

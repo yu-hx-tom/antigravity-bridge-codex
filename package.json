@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-codex-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test",
+    "check": "node --check server.mjs && node --check core.mjs && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
