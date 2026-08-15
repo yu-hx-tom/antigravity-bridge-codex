@@ -73,6 +73,11 @@ test("models normalize, deduplicate and produce a Codex catalog", () => {
   assert.equal(catalog.models[0].visibility, "list");
   assert.equal(catalog.models[0].apply_patch_tool_type, "freeform");
   assert.ok(catalog.models.every((model) => model.base_instructions?.length > 0));
+  assert.ok(catalog.models.every((model) => model.supports_reasoning_summaries === false));
+  assert.ok(catalog.models.every((model) => model.default_reasoning_level));
+  assert.ok(catalog.models.every((model) => model.supported_reasoning_levels.length === 1));
+  assert.ok(catalog.models.every((model) => model.input_modalities.includes("text")));
+  assert.equal(catalog.models.find((model) => model.slug === "gemini-3-flash").display_name, "Gemini 3 Flash");
 });
 
 test("Codex profile uses Responses API and a local API key", () => {

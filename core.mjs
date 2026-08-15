@@ -126,31 +126,73 @@ function contextWindowFor(modelId) {
   return 200_000;
 }
 
+function displayNameFor(modelId) {
+  const words = String(modelId).split("-").map((word) => {
+    if (/^gpt$/i.test(word)) return "GPT";
+    if (/^oss$/i.test(word)) return "OSS";
+    if (/^\d+(?:\.\d+)*$/.test(word) || /^\d+b$/i.test(word)) return word.toUpperCase();
+    return word ? `${word[0].toUpperCase()}${word.slice(1)}` : word;
+  });
+  return words.join(" ");
+}
+
+function reasoningFor(modelId) {
+  if (/extra-low|flash-lite|\blite\b/i.test(modelId)) return "low";
+  if (/(?:^|-)low(?:-|$)/i.test(modelId)) return "low";
+  if (/medium/i.test(modelId)) return "medium";
+  if (/high|thinking|(?:^|-)pro(?:-|$)|opus/i.test(modelId)) return "high";
+  return "medium";
+}
+
+const REASONING_DESCRIPTIONS = {
+  low: "Fast responses with lighter reasoning",
+  medium: "Balanced reasoning for everyday coding tasks",
+  high: "Greater reasoning depth for complex coding tasks",
+};
+
 export function createModelCatalog(models) {
   return {
     models: models.map((model, index) => {
       const contextWindow = contextWindowFor(model.id);
+      const reasoning = reasoningFor(model.id);
       return {
         slug: model.id,
-        display_name: model.displayName || model.id,
+        display_name: model.displayName && model.displayName !== model.id
+          ? model.displayName
+          : displayNameFor(model.id),
         description: "Antigravity via local CLIProxyAPI",
-        default_reasoning_level: null,
-        supported_reasoning_levels: [],
+        default_reasoning_level: reasoning,
+        supported_reasoning_levels: [{
+          effort: reasoning,
+          description: REASONING_DESCRIPTIONS[reasoning],
+        }],
         shell_type: "shell_command",
         visibility: "list",
         supported_in_api: true,
         priority: index,
+        additional_speed_tiers: [],
+        service_tiers: [],
+        availability_nux: null,
         upgrade: null,
-          base_instructions: "You are Codex, a coding agent. Work with the user in the current workspace, follow instructions carefully, use tools when needed, and report results concisely.",
+        base_instructions: "You are Codex, a coding agent. Work with the user in the current workspace, follow instructions carefully, use tools when needed, and report results concisely.",
+        model_messages: null,
+        default_reasoning_summary: "none",
+        supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: null,
         apply_patch_tool_type: "freeform",
+        web_search_tool_type: "text_and_image",
         truncation_policy: { mode: "tokens", limit: 10_000 },
         supports_parallel_tool_calls: true,
-        supports_image_detail_original: false,
+        supports_image_detail_original: true,
         context_window: contextWindow,
         max_context_window: contextWindow,
+        effective_context_window_percent: 95,
+        comp_hash: `antigravity-${model.id}`,
         experimental_supported_tools: [],
+        input_modalities: ["text", "image"],
+        supports_search_tool: false,
+        use_responses_lite: false,
       };
     }),
   };

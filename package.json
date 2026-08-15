@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test",
-    "check": "node --check server.mjs && node --check core.mjs && node --check public/app.js"
+    "check": "node --check server.mjs && node --check core.mjs && node --check public/app.js && node --check scripts/verify-codex-catalog.mjs",
+    "verify:catalog": "node scripts/verify-codex-catalog.mjs"
   },
   "engines": {
     "node": ">=18"
