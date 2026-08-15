@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test",
-    "check": "node --check server.mjs && node --check core.mjs && node --check public/app.js && node --check scripts/verify-codex-catalog.mjs",
+    "check": "node --check server.mjs && node --check core.mjs && node --check transaction.mjs && node --check public/app.js && node --check scripts/verify-codex-catalog.mjs",
     "verify:catalog": "node scripts/verify-codex-catalog.mjs"
   },
   "engines": {

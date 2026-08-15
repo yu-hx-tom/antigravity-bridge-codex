@@ -21,6 +21,16 @@ import {
   normalizeModels,
   parseQuotaPayload,
 } from "./core.mjs";
+import {
+  applyFiles,
+  atomicWrite,
+  atomicWriteJson,
+  createSnapshot,
+  hashFile,
+  restoreSnapshot,
+  updateSnapshotState,
+  verifySnapshot,
+} from "./transaction.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -48,12 +58,14 @@ const runtime = {
   proxyProcess: null,
   proxyStartedAt: null,
   proxyStarting: false,
+  shuttingDown: false,
   install: { running: false, message: "" },
   logs: [],
   errors: [],
   quotas: {},
   lastQuotaSweep: 0,
   quotaRefreshing: false,
+  codexLaunch: { running: false, message: "" },
   accountCache: { at: 0, value: [] },
   modelCache: { at: 0, value: [] },
 };
@@ -95,8 +107,7 @@ async function readJson(filePath, fallback) {
 }
 
 async function writeJson(filePath, value) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await atomicWriteJson(filePath, value);
 }
 
 async function initialize() {
@@ -109,6 +120,7 @@ async function initialize() {
   runtime.settings = { ...defaultSettings(), ...(await readJson(SETTINGS_PATH, {})) };
   runtime.quotas = await readJson(QUOTA_CACHE_PATH, {});
   await writeJson(SETTINGS_PATH, runtime.settings);
+  await recoverInterruptedTakeover();
 }
 
 function redact(value) {
@@ -377,6 +389,9 @@ async function startProxy() {
       addLog("core", `核心已退出（code=${code ?? "-"}, signal=${signal ?? "-"}）`, code ? "error" : "info");
       runtime.proxyProcess = null;
       runtime.proxyStartedAt = null;
+      if (!runtime.shuttingDown && runtime.settings.codexActiveBackup) {
+        restoreCodexConfig().catch((error) => addError("recovery", error));
+      }
     });
     child.once("error", (error) => addError("core", error));
     await waitForProxy();
@@ -601,7 +616,10 @@ async function backupIfChanged(filePath, nextContent) {
   const backupDir = path.join(DATA_DIR, "backups", "codex", stamp);
   await fs.mkdir(backupDir, { recursive: true });
   const backupPath = path.join(backupDir, path.basename(filePath));
-  await fs.copyFile(filePath, backupPath);
+  await atomicWrite(backupPath, current);
+  if (await hashFile(backupPath) !== await hashFile(filePath)) {
+    throw new Error("Codex profile backup verification failed");
+  }
   return backupPath;
 }
 
@@ -616,30 +634,27 @@ function codexAppUserModelId(appPath) {
   return match ? `${match[1]}_${match[2]}!App` : "";
 }
 
-async function writeCodexLauncher() {
+async function writeCodexLauncher(model = runtime.settings.defaultModel) {
   const preferredPath = runtime.settings.codexAppPath || process.env.CODEX_APP_PATH || "";
   const preferredAppId = codexAppUserModelId(preferredPath);
   const script = `$ErrorActionPreference = 'Stop'
 $appId = ${powershellLiteral(preferredAppId)}
-$codexHome = ${powershellLiteral(liveCodexHomePath())}
-$stagedHome = ${powershellLiteral(CODEX_HOME_DIR)}
-$configPath = Join-Path $codexHome 'config.toml'
-if (-not (Test-Path -LiteralPath $configPath)) {
-  throw 'Codex API Service config is not active. Open the bridge page and apply it first.'
-}
-$config = Get-Content -Raw -LiteralPath $configPath
-if ($config -notmatch 'model_provider\\s*=\\s*"antigravity_local"') {
-  throw 'Codex API Service config is not active. Open the bridge page and apply it first.'
-}
+$settingsPath = ${powershellLiteral(SETTINGS_PATH)}
+$bridgeUrl = ${powershellLiteral(`http://${UI_HOST}:${UI_PORT}`)}
+$model = ${powershellLiteral(model)}
+if (-not (Test-Path -LiteralPath $settingsPath)) { throw 'Bridge settings were not found.' }
+$settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+$headers = @{ 'X-Bridge-Key' = $settings.uiKey }
+$body = @{ model = $model } | ConvertTo-Json
 
-$announced = $false
-while (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue) {
-  if (-not $announced) {
-    Write-Output 'Waiting for Codex to exit. Close every Codex window and tray process; this launcher will continue automatically.'
-    $announced = $true
-  }
-  Start-Sleep -Seconds 1
+$codexProcesses = Get-Process -Name ChatGPT -ErrorAction SilentlyContinue
+foreach ($process in $codexProcesses) { [void]$process.CloseMainWindow() }
+$deadline = (Get-Date).AddSeconds(10)
+while ((Get-Process -Name ChatGPT -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+  Start-Sleep -Milliseconds 250
 }
+Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Stop-Process -ErrorAction Stop
+Write-Output 'Codex has exited.'
 
 if ([string]::IsNullOrWhiteSpace($appId)) {
   $package = Get-AppxPackage | Where-Object {
@@ -652,25 +667,33 @@ if ([string]::IsNullOrWhiteSpace($appId)) {
   throw 'The Codex Store AppID was not found. Set the current ChatGPT.exe path in Advanced Settings.'
 }
 
-$target = 'shell:AppsFolder\\' + $appId
-Start-Process -FilePath 'explorer.exe' -ArgumentList @($target) -ErrorAction Stop | Out-Null
-Write-Output ('Codex API Service activation sent: ' + $appId)
+$activated = $false
+try {
+  Invoke-RestMethod -Method Post -Uri ($bridgeUrl + '/api/codex/activate') -Headers $headers -ContentType 'application/json' -Body $body | Out-Null
+  $activated = $true
+  $target = 'shell:AppsFolder\\' + $appId
+  Start-Process -FilePath 'explorer.exe' -ArgumentList @($target) -ErrorAction Stop | Out-Null
+  Write-Output ('Codex API Service activation sent: ' + $appId)
 
-$deadline = (Get-Date).AddSeconds(20)
-while (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
-  Start-Sleep -Milliseconds 250
-}
-if (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue)) {
-  throw 'Codex did not start within 20 seconds.'
-}
+  $deadline = (Get-Date).AddSeconds(20)
+  while (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue)) {
+    throw 'Codex did not start within 20 seconds.'
+  }
 
-# The Store app syncs its official profile during startup, so apply the staged API profile afterwards.
-Start-Sleep -Seconds 3
-New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $stagedHome 'config.toml') -Destination $configPath -Force
-Copy-Item -LiteralPath (Join-Path $stagedHome 'auth.json') -Destination (Join-Path $codexHome 'auth.json') -Force
-Write-Output 'Codex API Service profile reapplied after desktop startup.'
-Start-Sleep -Seconds 2
+  Start-Sleep -Seconds 3
+  Invoke-RestMethod -Method Post -Uri ($bridgeUrl + '/api/codex/reapply') -Headers $headers -ContentType 'application/json' -Body '{}' | Out-Null
+  Write-Output ('Codex API Service is active with model: ' + $model)
+} catch {
+  if ($activated) {
+    try {
+      Invoke-RestMethod -Method Post -Uri ($bridgeUrl + '/api/codex/restore') -Headers $headers -ContentType 'application/json' -Body '{}' | Out-Null
+    } catch {}
+  }
+  throw
+}
 `;
   const command = `@echo off\r
 chcp 65001 >nul 2>&1\r
@@ -716,11 +739,13 @@ async function prepareCodex(modelRequested = "") {
   const auth = createCodexApiAuth(runtime.settings.clientKey);
   const backupPath = await backupIfChanged(profilePath, profile);
   await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(CATALOG_PATH, catalog, "utf8");
-  await fs.writeFile(profilePath, profile, "utf8");
-  await fs.writeFile(configPath, config, "utf8");
-  await fs.writeFile(authPath, auth, "utf8");
-  const launcher = await writeCodexLauncher();
+  await applyFiles([
+    { path: CATALOG_PATH, data: catalog },
+    { path: profilePath, data: profile },
+    { path: configPath, data: config },
+    { path: authPath, data: auth },
+  ]);
+  const launcher = await writeCodexLauncher(model);
   runtime.settings.defaultModel = model;
   runtime.settings.codexApiPrepared = true;
   await writeJson(SETTINGS_PATH, runtime.settings);
@@ -753,25 +778,18 @@ async function backupLiveCodex() {
     && existing.startsWith(`${backupRoot}${path.sep}`)
     && fsSync.existsSync(path.join(existing, "manifest.json"))) {
     const manifest = await readJson(path.join(existing, "manifest.json"), null);
-    if (manifest && path.resolve(manifest.liveHome) === liveHome) return existing;
+    if (manifest && path.resolve(manifest.liveHome) === liveHome) {
+      await verifySnapshot(existing, manifest);
+      return existing;
+    }
     throw new Error("已有其他 Codex Home 的活动备份，请先恢复原 Codex 配置");
   }
 
-  const configPath = path.join(liveHome, "config.toml");
-  const authPath = path.join(liveHome, "auth.json");
-  const configExists = fsSync.existsSync(configPath);
-  const authExists = fsSync.existsSync(authPath);
   const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
   const backupDir = path.join(ACTIVE_BACKUP_ROOT, stamp);
-  await fs.mkdir(backupDir, { recursive: true });
-  if (configExists) await fs.copyFile(configPath, path.join(backupDir, "config.toml"));
-  if (authExists) await fs.copyFile(authPath, path.join(backupDir, "auth.json"));
-  await writeJson(path.join(backupDir, "manifest.json"), {
-    createdAt: new Date().toISOString(),
-    liveHome,
-    configExists,
-    authExists,
-  });
+  const manifest = await createSnapshot(liveHome, backupDir, ["config.toml", "auth.json"]);
+  await writeJson(path.join(backupDir, "manifest.json"), manifest);
+  await verifySnapshot(backupDir, manifest);
   runtime.settings.codexActiveBackup = backupDir;
   await writeJson(SETTINGS_PATH, runtime.settings);
   return backupDir;
@@ -781,17 +799,41 @@ async function activateCodexConfig(modelRequested = "") {
   const prepared = await prepareCodex(modelRequested);
   const liveHome = liveCodexHomePath();
   const backupPath = await backupLiveCodex();
-  await fs.mkdir(liveHome, { recursive: true });
-  await Promise.all([
-    fs.copyFile(prepared.configPath, path.join(liveHome, "config.toml")),
-    fs.copyFile(prepared.authPath, path.join(liveHome, "auth.json")),
-  ]);
+  let manifest = await readJson(path.join(backupPath, "manifest.json"), null);
+  if (!manifest) throw new Error("Codex backup manifest is incomplete");
+  manifest = await updateSnapshotState(backupPath, manifest, "applying", { selectedModel: prepared.model });
+  const configPath = path.join(liveHome, "config.toml");
+  const authPath = path.join(liveHome, "auth.json");
+  const config = await fs.readFile(prepared.configPath);
+  const auth = await fs.readFile(prepared.authPath);
+  try {
+    await applyFiles([
+      { path: configPath, data: config },
+      { path: authPath, data: auth },
+    ]);
+    manifest = await updateSnapshotState(backupPath, manifest, "active", {
+      applied: {
+        "config.toml": await hashFile(configPath),
+        "auth.json": await hashFile(authPath),
+      },
+    });
+  } catch (error) {
+    try {
+      await restoreSnapshot(backupPath, manifest);
+      await updateSnapshotState(backupPath, manifest, "failed-restored", { failure: error.message });
+      runtime.settings.codexActiveBackup = "";
+      await writeJson(SETTINGS_PATH, runtime.settings);
+    } catch (restoreError) {
+      throw new AggregateError([error, restoreError], "Codex takeover failed and automatic restore also failed");
+    }
+    throw error;
+  }
   addLog("codex", `API Service 配置已应用；完全退出 Codex 后重新启动，默认模型 ${prepared.model}`);
   return {
     ...prepared,
     liveHome,
-    configPath: path.join(liveHome, "config.toml"),
-    authPath: path.join(liveHome, "auth.json"),
+    configPath,
+    authPath,
     backupPath,
   };
 }
@@ -803,22 +845,95 @@ async function restoreCodexConfig() {
     || !backupDir.startsWith(`${backupRoot}${path.sep}`)) {
     throw new Error("没有可恢复的 Codex 默认配置备份");
   }
-  const manifest = await readJson(path.join(backupDir, "manifest.json"), null);
+  let manifest = await readJson(path.join(backupDir, "manifest.json"), null);
   if (!manifest) throw new Error("Codex 默认配置备份不完整");
   const liveHome = path.resolve(manifest.liveHome || liveCodexHomePath());
-  await fs.mkdir(liveHome, { recursive: true });
-  for (const [fileName, existed] of [
-    ["config.toml", manifest.configExists],
-    ["auth.json", manifest.authExists],
-  ]) {
-    const target = path.join(liveHome, fileName);
-    if (existed) await fs.copyFile(path.join(backupDir, fileName), target);
-    else await fs.rm(target, { force: true });
-  }
+  manifest = await updateSnapshotState(backupDir, manifest, "restoring");
+  await restoreSnapshot(backupDir, manifest);
+  await updateSnapshotState(backupDir, manifest, "restored");
   runtime.settings.codexActiveBackup = "";
   await writeJson(SETTINGS_PATH, runtime.settings);
   addLog("codex", "已恢复 API Service 接管前的 config.toml 和 auth.json");
   return { restored: true, liveHome, backupDir };
+}
+
+async function recoverInterruptedTakeover() {
+  if (!runtime.settings?.codexActiveBackup) return false;
+  const backupDir = path.resolve(runtime.settings.codexActiveBackup);
+  const backupRoot = path.resolve(ACTIVE_BACKUP_ROOT);
+  if (!backupDir.startsWith(`${backupRoot}${path.sep}`)) {
+    throw new Error("Refusing to recover a Codex backup outside the bridge backup directory");
+  }
+  let manifest = await readJson(path.join(backupDir, "manifest.json"), null);
+  if (!manifest) throw new Error("The active Codex backup manifest is missing");
+  if (["restored", "failed-restored", "recovered"].includes(manifest.state)) {
+    runtime.settings.codexActiveBackup = "";
+    await writeJson(SETTINGS_PATH, runtime.settings);
+    return true;
+  }
+  if (!["prepared", "applying", "restoring"].includes(manifest.state)) return false;
+  const interruptedState = manifest.state;
+  await restoreSnapshot(backupDir, manifest);
+  manifest = await updateSnapshotState(backupDir, manifest, "recovered", {
+    recoveryReason: `bridge-started-after-${interruptedState}`,
+  });
+  runtime.settings.codexActiveBackup = "";
+  await writeJson(SETTINGS_PATH, runtime.settings);
+  addLog("recovery", `Recovered interrupted Codex takeover from ${backupDir}`);
+  return true;
+}
+
+async function resumeActiveTakeover() {
+  if (!runtime.settings.codexActiveBackup) return false;
+  const backupDir = path.resolve(runtime.settings.codexActiveBackup);
+  const manifest = await readJson(path.join(backupDir, "manifest.json"), null);
+  if (!manifest || (manifest.state && manifest.state !== "active")) return false;
+  try {
+    await startProxy();
+    addLog("recovery", "Resumed the proxy for the active Codex takeover");
+    return true;
+  } catch (error) {
+    addError("recovery", error);
+    await restoreCodexConfig();
+    addLog("recovery", "Restored the original Codex profile because the proxy could not restart", "warn");
+    return false;
+  }
+}
+
+async function reapplyPreparedCodex() {
+  if (!await proxyHealth()) await startProxy();
+  const backupDir = path.resolve(runtime.settings.codexActiveBackup || "");
+  const backupRoot = path.resolve(ACTIVE_BACKUP_ROOT);
+  if (!runtime.settings.codexActiveBackup || !backupDir.startsWith(`${backupRoot}${path.sep}`)) {
+    throw new Error("Codex API Service takeover is not active");
+  }
+  let manifest = await readJson(path.join(backupDir, "manifest.json"), null);
+  if (!manifest) throw new Error("Codex backup manifest is incomplete");
+  manifest = await updateSnapshotState(backupDir, manifest, "applying", { reapplying: true });
+  const liveHome = liveCodexHomePath();
+  const configPath = path.join(liveHome, "config.toml");
+  const authPath = path.join(liveHome, "auth.json");
+  try {
+    await applyFiles([
+      { path: configPath, data: await fs.readFile(path.join(CODEX_HOME_DIR, "config.toml")) },
+      { path: authPath, data: await fs.readFile(path.join(CODEX_HOME_DIR, "auth.json")) },
+    ]);
+    manifest = await updateSnapshotState(backupDir, manifest, "active", {
+      reapplying: false,
+      reappliedAt: new Date().toISOString(),
+      applied: {
+        "config.toml": await hashFile(configPath),
+        "auth.json": await hashFile(authPath),
+      },
+    });
+  } catch (error) {
+    await restoreSnapshot(backupDir, manifest);
+    await updateSnapshotState(backupDir, manifest, "failed-restored", { failure: error.message });
+    runtime.settings.codexActiveBackup = "";
+    await writeJson(SETTINGS_PATH, runtime.settings);
+    throw error;
+  }
+  return { active: true, model: manifest.selectedModel || runtime.settings.defaultModel };
 }
 
 async function activateCodex(modelRequested = "") {
@@ -828,6 +943,42 @@ async function activateCodex(modelRequested = "") {
     activation: "manual-store-restart",
     launched: false,
     manualRestartRequired: true,
+  };
+}
+
+async function launchCodex(modelRequested = "") {
+  if (runtime.codexLaunch.running) throw new Error("Codex one-click launch is already running");
+  const prepared = await prepareCodex(modelRequested);
+  runtime.codexLaunch = { running: true, message: "Closing Codex and applying the API Service profile" };
+  const child = spawn("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    CODEX_LAUNCHER_PS1_PATH,
+  ], {
+    cwd: DATA_DIR,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (chunk) => addLog("codex-launch", chunk.toString("utf8").trim()));
+  child.stderr.on("data", (chunk) => addLog("codex-launch", chunk.toString("utf8").trim(), "warn"));
+  child.once("error", (error) => {
+    runtime.codexLaunch = { running: false, message: error.message };
+    addError("codex-launch", error);
+  });
+  child.once("exit", (code) => {
+    runtime.codexLaunch = {
+      running: false,
+      message: code === 0 ? "Codex API Service started" : `Launcher exited with code ${code}`,
+    };
+    if (code) addError("codex-launch", runtime.codexLaunch.message);
+  });
+  return {
+    ...prepared,
+    activation: "one-click",
+    launched: true,
+    launcherPid: child.pid,
   };
 }
 
@@ -879,6 +1030,7 @@ async function dashboard() {
       authPath: activeAuthPath,
       preparedHome: codexHomePath(),
       launcherPath: CODEX_LAUNCHER_PATH,
+      launch: runtime.codexLaunch,
     },
     lastQuotaSweep: runtime.lastQuotaSweep || null,
     logs: runtime.logs.slice(-40),
@@ -961,9 +1113,14 @@ async function handleApi(request, response, url) {
   } else if (key === "POST /api/codex/prepare") {
     const body = await readBody(request);
     result = await prepareCodex(body.model || "");
-  } else if (key === "POST /api/codex/activate" || key === "POST /api/codex/launch") {
+  } else if (key === "POST /api/codex/activate") {
     const body = await readBody(request);
     result = await activateCodex(body.model || "");
+  } else if (key === "POST /api/codex/launch") {
+    const body = await readBody(request);
+    result = await launchCodex(body.model || "");
+  } else if (key === "POST /api/codex/reapply") {
+    result = await reapplyPreparedCodex();
   } else if (key === "POST /api/codex/restore") {
     result = await restoreCodexConfig();
   } else {
@@ -1050,16 +1207,34 @@ export async function startServer() {
     server.listen(UI_PORT, UI_HOST, resolve);
   });
   addLog("app", `管理页已监听 http://${UI_HOST}:${UI_PORT}`);
+  setTimeout(() => resumeActiveTakeover().catch((error) => addError("recovery", error)), 50);
   const quotaTimer = setInterval(scheduledQuotaRefresh, 60_000);
   quotaTimer.unref();
 
-  const shutdown = () => {
+  let closing = false;
+  const shutdown = async () => {
+    if (closing) return;
+    closing = true;
+    runtime.shuttingDown = true;
     clearInterval(quotaTimer);
-    if (runtime.proxyProcess?.exitCode === null) runtime.proxyProcess.kill();
+    if (runtime.settings.codexActiveBackup) {
+      try {
+        await restoreCodexConfig();
+      } catch (error) {
+        addError("recovery", error);
+      }
+    }
+    if (runtime.proxyProcess?.exitCode === null) {
+      try {
+        await stopProxy();
+      } catch (error) {
+        addError("core", error);
+      }
+    }
     server.close();
   };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
   if (process.env.BRIDGE_NO_OPEN !== "1") setTimeout(openDashboard, 300);
   return server;
 }

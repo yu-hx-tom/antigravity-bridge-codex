@@ -184,7 +184,7 @@ function render(data) {
   $("#launchEndpoint").textContent = proxy.endpoint.replace(/^https?:\/\//, "");
   $("#binaryPath").textContent = `核心路径：${proxy.binaryPath || "尚未配置"}${proxy.install.message ? ` · ${proxy.install.message}` : ""}`;
   $("#profilePath").textContent = data.codex.configPath;
-  $("#launchCodex").querySelector("span").textContent = "应用 API Service 配置";
+  $("#launchCodex").querySelector("span").textContent = "一键启动 Codex";
   $("#prepareProfile").textContent = "仅准备 API Service";
   $("#restoreCodex").textContent = "恢复原 Codex 配置";
   $("#dataPath").textContent = `运行数据：${data.paths.dataDir}`;
@@ -270,7 +270,7 @@ $("#launchCodex").addEventListener("click", () => runBusy("launch", async () => 
     method: "POST",
     body: JSON.stringify({ model: $("#modelSelect").value }),
   });
-  showToast("配置与 API Key 已备份并应用。请完全退出 Codex，再双击“启动 Codex API Service.bat”");
+  showToast("正在退出 Codex、应用配置并启动 API Service 桌面端");
   return result;
 }).catch(() => {}));
 
