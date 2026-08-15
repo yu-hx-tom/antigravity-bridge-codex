@@ -46,6 +46,11 @@ test("local dashboard serves a protected API", { timeout: 15_000 }, async () => 
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ag-codex-bridge-"));
   const liveCodexHome = path.join(dataDir, "live-codex-home");
   const port = await freePort();
+  await fs.writeFile(path.join(dataDir, "settings.json"), JSON.stringify({
+    clientKey: "legacy-client-secret",
+    managementKey: "legacy-management-secret",
+    uiKey: "legacy-ui-secret",
+  }));
   const child = spawn(process.execPath, ["server.mjs"], {
     cwd: path.resolve(import.meta.dirname, ".."),
     env: {
@@ -54,6 +59,7 @@ test("local dashboard serves a protected API", { timeout: 15_000 }, async () => 
       BRIDGE_CODEX_HOME: liveCodexHome,
       BRIDGE_PORT: String(port),
       BRIDGE_NO_OPEN: "1",
+      BRIDGE_DISABLE_EFS: "1",
     },
     stdio: "ignore",
   });
@@ -71,10 +77,27 @@ test("local dashboard serves a protected API", { timeout: 15_000 }, async () => 
     const body = await allowed.json();
     assert.equal(body.proxy.running, false);
     assert.equal(body.proxy.endpoint, "http://127.0.0.1:8317/v1");
+    assert.equal(body.proxy.compatibility.installed, false);
+    assert.equal(body.proxy.compatibility.pinnedVersion, "7.2.132");
     assert.equal(body.paths.codexHome, path.join(dataDir, "codex-home"));
     assert.equal(body.codex.configPath, path.join(liveCodexHome, "config.toml"));
     assert.equal(body.codex.authPath, path.join(liveCodexHome, "auth.json"));
     assert.equal(body.paths.liveCodexHome, liveCodexHome);
+    const storedSettings = await fs.readFile(path.join(dataDir, "settings.json"), "utf8");
+    assert.doesNotMatch(storedSettings, /legacy-|agc_|agm_|agui_|clientKey|managementKey|uiKey/);
+    const protectedSecrets = await fs.readFile(path.join(dataDir, "secure", "secrets.dpapi"), "utf8");
+    assert.doesNotMatch(protectedSecrets, /legacy-|agc_|agm_|agui_/);
+
+    const diagnosticsResponse = await fetch(`http://127.0.0.1:${port}/api/diagnostics`, {
+      method: "POST",
+      headers: { "X-Bridge-Key": token, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(diagnosticsResponse.status, 200);
+    const diagnostics = await diagnosticsResponse.json();
+    assert.equal(diagnostics.redacted, true);
+    assert.ok(diagnostics.archivePath.startsWith(path.join(dataDir, "diagnostics")));
+    assert.ok((await fs.stat(diagnostics.archivePath)).size > 0);
   } finally {
     child.kill();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -105,6 +128,7 @@ test("bridge startup restores an interrupted Codex takeover", { timeout: 15_000 
       BRIDGE_CODEX_HOME: liveCodexHome,
       BRIDGE_PORT: String(port),
       BRIDGE_NO_OPEN: "1",
+      BRIDGE_DISABLE_EFS: "1",
     },
     stdio: "ignore",
   });

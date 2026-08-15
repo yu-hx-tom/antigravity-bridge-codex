@@ -31,11 +31,22 @@ import {
   updateSnapshotState,
   verifySnapshot,
 } from "./transaction.mjs";
+import {
+  createTokenCommand,
+  enableEfs,
+  openDirectory,
+  readProtectedJson,
+  sealDirectory,
+  writeProtectedJson,
+} from "./security.mjs";
+import { readHistoryInventory } from "./history.mjs";
+import { friendlyProxyError, modelCapabilities } from "./protocol.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
-const APP_VERSION = "0.1.0";
+const CLIPROXY_LOCK_PATH = path.join(ROOT, "cliproxy.lock.json");
+const APP_VERSION = "0.2.0";
 const UI_HOST = "127.0.0.1";
 const UI_PORT = Number(process.env.BRIDGE_PORT || 8787);
 const DATA_DIR = path.resolve(
@@ -43,7 +54,11 @@ const DATA_DIR = path.resolve(
     || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "AntigravityCodexBridge"),
 );
 const SETTINGS_PATH = path.join(DATA_DIR, "settings.json");
-const CONFIG_PATH = path.join(DATA_DIR, "config.yaml");
+const SECURE_DIR = path.join(DATA_DIR, "secure");
+const CONFIG_PATH = path.join(SECURE_DIR, "config.yaml");
+const SECRETS_PATH = path.join(SECURE_DIR, "secrets.dpapi");
+const AUTH_VAULT_PATH = path.join(SECURE_DIR, "oauth-vault.dpapi");
+const TOKEN_COMMAND_PATH = path.join(SECURE_DIR, "get-client-token.ps1");
 const AUTH_DIR = path.join(DATA_DIR, "auths");
 const BIN_DIR = path.join(DATA_DIR, "bin");
 const CATALOG_PATH = path.join(DATA_DIR, "codex-model-catalog.json");
@@ -60,14 +75,17 @@ const runtime = {
   proxyStarting: false,
   shuttingDown: false,
   install: { running: false, message: "" },
+  proxyCompatibility: { at: 0, value: null },
   logs: [],
   errors: [],
   quotas: {},
   lastQuotaSweep: 0,
   quotaRefreshing: false,
   codexLaunch: { running: false, message: "" },
+  security: { dpapi: false, efsAuth: false, efsSecure: false, warnings: [] },
   accountCache: { at: 0, value: [] },
   modelCache: { at: 0, value: [] },
+  historyCache: { at: 0, value: null },
 };
 
 function randomKey(prefix) {
@@ -92,6 +110,11 @@ function defaultSettings() {
     defaultModel: "",
     codexActiveBackup: "",
     codexApiPrepared: false,
+  };
+}
+
+function defaultSecrets() {
+  return {
     clientKey: randomKey("agc"),
     managementKey: randomKey("agm"),
     uiKey: randomKey("agui"),
@@ -110,16 +133,47 @@ async function writeJson(filePath, value) {
   await atomicWriteJson(filePath, value);
 }
 
+async function saveSettings() {
+  const { clientKey, managementKey, uiKey, ...safe } = runtime.settings;
+  await writeProtectedJson(SECRETS_PATH, { clientKey, managementKey, uiKey });
+  await writeJson(SETTINGS_PATH, safe);
+  runtime.security.dpapi = true;
+}
+
 async function initialize() {
   await Promise.all([
     fs.mkdir(DATA_DIR, { recursive: true }),
     fs.mkdir(AUTH_DIR, { recursive: true }),
     fs.mkdir(BIN_DIR, { recursive: true }),
     fs.mkdir(CODEX_HOME_DIR, { recursive: true }),
+    fs.mkdir(SECURE_DIR, { recursive: true }),
   ]);
-  runtime.settings = { ...defaultSettings(), ...(await readJson(SETTINGS_PATH, {})) };
+  const stored = await readJson(SETTINGS_PATH, {});
+  let secrets;
+  try {
+    secrets = await readProtectedJson(SECRETS_PATH);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    const legacy = {
+      clientKey: stored.clientKey,
+      managementKey: stored.managementKey,
+      uiKey: stored.uiKey,
+    };
+    secrets = Object.values(legacy).every((value) => typeof value === "string" && value)
+      ? legacy
+      : defaultSecrets();
+  }
+  runtime.settings = { ...defaultSettings(), ...stored, ...secrets };
   runtime.quotas = await readJson(QUOTA_CACHE_PATH, {});
-  await writeJson(SETTINGS_PATH, runtime.settings);
+  await saveSettings();
+  await atomicWrite(TOKEN_COMMAND_PATH, createTokenCommand(SECRETS_PATH));
+  if (!await canConnect(runtime.settings.proxyPort)) await sealAuthFiles();
+  const [authEfs, secureEfs] = await Promise.all([enableEfs(AUTH_DIR), enableEfs(SECURE_DIR)]);
+  runtime.security.efsAuth = authEfs.enabled;
+  runtime.security.efsSecure = secureEfs.enabled;
+  runtime.security.warnings = [authEfs, secureEfs]
+    .filter((status) => !status.enabled && status.reason !== "disabled")
+    .map((status) => status.reason);
   await recoverInterruptedTakeover();
 }
 
@@ -127,7 +181,10 @@ function redact(value) {
   return String(value)
     .replace(/(authorization[:=]\s*bearer\s+)[^\s"']+/gi, "$1[redacted]")
     .replace(/("(?:access_token|refresh_token|id_token)"\s*:\s*")[^"]+/gi, "$1[redacted]")
-    .replace(/([?&](?:code|token)=)[^&\s]+/gi, "$1[redacted]");
+    .replace(/([?&](?:code|token)=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/\bag(?:c|m|ui)_[A-Za-z0-9_-]+\b/g, "[redacted-key]")
+    .replace(/\b[A-Z]:\\Users\\[^\\\s]+/gi, "%USERPROFILE%")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]");
 }
 
 function addLog(scope, message, level = "info") {
@@ -144,7 +201,7 @@ function addError(scope, error) {
 
 function publicSettings() {
   const { clientKey, managementKey, uiKey, ...safe } = runtime.settings;
-  return { ...safe, clientKey: `${clientKey.slice(0, 8)}...${clientKey.slice(-4)}` };
+  return safe;
 }
 
 function validateSettings(input) {
@@ -204,59 +261,31 @@ async function findFile(directory, targetName) {
   return "";
 }
 
-async function getLatestRelease(architecture) {
-  const repository = "router-for-me/CLIProxyAPI";
-  const suffix = `_windows_${architecture}.zip`;
-  let apiError;
-
-  try {
-    const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "AntigravityCodexBridge" },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const release = await response.json();
-    const asset = release.assets?.find((item) => String(item.name).toLowerCase().endsWith(suffix));
-    if (!asset) throw new Error(`没有 Windows ${architecture} 安装包`);
-    return { tagName: release.tag_name || "latest", asset };
-  } catch (error) {
-    apiError = error;
-    addLog("install", `GitHub API 不可用（${error.message}），正在改用 Releases 页面`, "warn");
+async function getPinnedRelease(architecture) {
+  const lock = await readJson(CLIPROXY_LOCK_PATH, null);
+  const assetLock = lock?.assets?.[architecture];
+  if (!lock?.repository || !lock?.version || !lock?.tag || !assetLock?.binarySha256) {
+    throw new Error(`CLIProxyAPI ${architecture} is not pinned in cliproxy.lock.json`);
   }
-
-  try {
-    const response = await fetch(`https://github.com/${repository}/releases/latest`, {
-      headers: { "User-Agent": "AntigravityCodexBridge" },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const releaseUrl = new URL(response.url);
-    const prefix = `/${repository}/releases/tag/`;
-    if (releaseUrl.hostname !== "github.com" || !releaseUrl.pathname.startsWith(prefix)) {
-      throw new Error("latest 没有跳转到受信任的发布页面");
-    }
-    const tagName = decodeURIComponent(releaseUrl.pathname.slice(prefix.length));
-    if (!/^v\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(tagName)) throw new Error("发布版本号格式无效");
-    const version = tagName.slice(1);
-    const name = `CLIProxyAPI_${version}_windows_${architecture}.zip`;
-    return {
-      tagName,
-      asset: {
-        name,
-        browser_download_url: `https://github.com/${repository}/releases/download/${tagName}/${name}`,
-      },
-    };
-  } catch (error) {
-    throw new Error(`无法获取 CLIProxyAPI 最新版本：API ${apiError.message}；Releases ${error.message}`);
-  }
+  const name = `CLIProxyAPI_${lock.version}_windows_${architecture}.zip`;
+  return {
+    lock,
+    tagName: lock.tag,
+    asset: {
+      name,
+      browser_download_url: `https://github.com/${lock.repository}/releases/download/${lock.tag}/${name}`,
+      binarySha256: assetLock.binarySha256.toLowerCase(),
+    },
+  };
 }
 
 async function installProxy() {
   if (runtime.install.running) throw new Error("核心正在安装，请稍候");
-  runtime.install = { running: true, message: "正在读取最新版本" };
+  if (await proxyHealth()) throw new Error("请先停止 CLIProxyAPI，再安装锁定版本");
+  runtime.install = { running: true, message: "正在读取锁定版本" };
   try {
     const architecture = process.arch === "arm64" ? "arm64" : "amd64";
-    const { tagName, asset } = await getLatestRelease(architecture);
+    const { lock, tagName, asset } = await getPinnedRelease(architecture);
     if (new URL(asset.browser_download_url).hostname !== "github.com") throw new Error("下载地址不是受信任的 GitHub 地址");
 
     runtime.install.message = `正在下载 ${asset.name}`;
@@ -281,11 +310,24 @@ async function installProxy() {
     await execFileAsync("tar.exe", ["-xf", archivePath, "-C", extractPath], { windowsHide: true, timeout: 60_000 });
     const sourceBinary = await findFile(extractPath, "cli-proxy-api.exe");
     if (!sourceBinary) throw new Error("安装包中未找到 cli-proxy-api.exe");
+    const binary = await fs.readFile(sourceBinary);
+    const binaryDigest = crypto.createHash("sha256").update(binary).digest("hex");
+    if (binaryDigest !== asset.binarySha256) {
+      throw new Error("CLIProxyAPI binary SHA-256 does not match cliproxy.lock.json");
+    }
     const destination = path.join(BIN_DIR, "cli-proxy-api.exe");
-    await fs.copyFile(sourceBinary, destination);
+    await atomicWrite(destination, binary);
     await fs.rm(tempRoot, { recursive: true, force: true });
     runtime.settings.proxyBinary = destination;
-    await writeJson(SETTINGS_PATH, runtime.settings);
+    await saveSettings();
+    runtime.proxyCompatibility = { at: 0, value: null };
+    await writeJson(path.join(BIN_DIR, "version.json"), {
+      version: lock.version,
+      tag: lock.tag,
+      commit: lock.commit,
+      binarySha256: binaryDigest,
+      installedAt: new Date().toISOString(),
+    });
     addLog("install", `CLIProxyAPI ${tagName} 安装完成`);
     return { version: tagName, binaryPath: destination };
   } catch (error) {
@@ -310,6 +352,18 @@ async function canConnect(port) {
   });
 }
 
+async function sealAuthFiles() {
+  const result = await sealDirectory(AUTH_DIR, AUTH_VAULT_PATH);
+  if (result.sealed) addLog("security", `Sealed ${result.count} OAuth credential file(s) with DPAPI`);
+  return result;
+}
+
+async function openAuthFiles() {
+  const result = await openDirectory(AUTH_DIR, AUTH_VAULT_PATH);
+  if (result.opened) addLog("security", `Opened ${result.count} OAuth credential file(s) for CLIProxyAPI`);
+  return result;
+}
+
 async function proxyRequest(endpoint, { method = "GET", body, management = false, timeout = 15_000 } = {}) {
   const prefix = management ? "/v0/management" : "";
   const key = management ? runtime.settings.managementKey : runtime.settings.clientKey;
@@ -331,8 +385,9 @@ async function proxyRequest(endpoint, { method = "GET", body, management = false
   }
   if (!response.ok) {
     const detail = payload?.error?.message || payload?.error || payload?.message || text || `HTTP ${response.status}`;
-    const error = new Error(`CLIProxyAPI ${response.status}: ${detail}`);
+    const error = new Error(friendlyProxyError(response.status, detail));
     error.status = response.status;
+    error.upstreamDetail = redact(detail);
     throw error;
   }
   return payload;
@@ -375,12 +430,14 @@ async function startProxy() {
 
   runtime.proxyStarting = true;
   try {
+    await openAuthFiles();
     await writeProxyConfig();
     const child = spawn(binary, ["--config", CONFIG_PATH], {
       cwd: DATA_DIR,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    child.bridgeReady = false;
     runtime.proxyProcess = child;
     runtime.proxyStartedAt = new Date().toISOString();
     child.stdout.on("data", (chunk) => addLog("core", chunk.toString("utf8").trim()));
@@ -389,12 +446,17 @@ async function startProxy() {
       addLog("core", `核心已退出（code=${code ?? "-"}, signal=${signal ?? "-"}）`, code ? "error" : "info");
       runtime.proxyProcess = null;
       runtime.proxyStartedAt = null;
-      if (!runtime.shuttingDown && runtime.settings.codexActiveBackup) {
-        restoreCodexConfig().catch((error) => addError("recovery", error));
-      }
+      void (async () => {
+        await sealAuthFiles();
+        if (child.bridgeReady && !runtime.shuttingDown && runtime.settings.codexActiveBackup) {
+          await restoreCodexConfig();
+        }
+      })().catch((error) => addError("recovery", error));
     });
     child.once("error", (error) => addError("core", error));
     await waitForProxy();
+    child.bridgeReady = true;
+    await fs.rm(CONFIG_PATH, { force: true });
     addLog("core", `服务已监听 127.0.0.1:${runtime.settings.proxyPort}`);
     runtime.accountCache.at = 0;
     runtime.modelCache.at = 0;
@@ -403,6 +465,8 @@ async function startProxy() {
     if (runtime.proxyProcess && runtime.proxyProcess.exitCode === null) runtime.proxyProcess.kill();
     runtime.proxyProcess = null;
     runtime.proxyStartedAt = null;
+    await fs.rm(CONFIG_PATH, { force: true });
+    await sealAuthFiles();
     addError("core", error);
     throw error;
   } finally {
@@ -423,8 +487,129 @@ async function stopProxy() {
   ]);
   runtime.proxyProcess = null;
   runtime.proxyStartedAt = null;
+  await sealAuthFiles();
   addLog("core", "服务已停止");
   return { running: false };
+}
+
+async function inspectProxyCompatibility(force = false) {
+  if (!force && runtime.proxyCompatibility.value && Date.now() - runtime.proxyCompatibility.at < 30_000) {
+    return runtime.proxyCompatibility.value;
+  }
+  const architecture = process.arch === "arm64" ? "arm64" : "amd64";
+  const lock = await readJson(CLIPROXY_LOCK_PATH, null);
+  const binaryPath = detectProxyBinary();
+  if (!binaryPath) {
+    const value = { installed: false, compatible: false, pinnedVersion: lock?.version || null };
+    runtime.proxyCompatibility = { at: Date.now(), value };
+    return value;
+  }
+  const binarySha256 = await hashFile(binaryPath);
+  let output = "";
+  try {
+    const result = await execFileAsync(binaryPath, ["-h"], { windowsHide: true, timeout: 5_000 });
+    output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  } catch (error) {
+    output = `${error.stdout || ""}\n${error.stderr || ""}`;
+  }
+  const installedVersion = output.match(/CLIProxyAPI Version:\s*([^,\s]+)/i)?.[1] || null;
+  const installedCommit = output.match(/Commit:\s*([^,\s]+)/i)?.[1] || null;
+  const expectedSha256 = lock?.assets?.[architecture]?.binarySha256?.toLowerCase() || null;
+  const value = {
+    installed: true,
+    compatible: Boolean(expectedSha256 && binarySha256 === expectedSha256),
+    pinnedVersion: lock?.version || null,
+    pinnedCommit: lock?.commit || null,
+    installedVersion,
+    installedCommit,
+    binarySha256,
+    expectedSha256,
+  };
+  runtime.proxyCompatibility = { at: Date.now(), value };
+  return value;
+}
+
+async function getHistory(force = false) {
+  if (!force && runtime.historyCache.value && Date.now() - runtime.historyCache.at < 10_000) {
+    return runtime.historyCache.value;
+  }
+  const value = await readHistoryInventory(liveCodexHomePath());
+  runtime.historyCache = { at: Date.now(), value };
+  return value;
+}
+
+function diagnosticPath(value) {
+  return String(value || "")
+    .replaceAll(os.homedir(), "%USERPROFILE%")
+    .replaceAll(process.env.LOCALAPPDATA || "\0", "%LOCALAPPDATA%");
+}
+
+async function createDiagnostics() {
+  const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  const diagnosticsDir = path.join(DATA_DIR, "diagnostics");
+  const stagingDir = path.join(diagnosticsDir, `.staging-${stamp}`);
+  const archivePath = path.join(diagnosticsDir, `antigravity-diagnostics-${stamp}.zip`);
+  await fs.mkdir(stagingDir, { recursive: true });
+  try {
+    const proxy = await proxyState();
+    const history = await getHistory(true);
+    const liveHome = liveCodexHomePath();
+    const configPath = path.join(liveHome, "config.toml");
+    const authPath = path.join(liveHome, "auth.json");
+    const config = await fs.readFile(configPath, "utf8").catch(() => "");
+    const summary = {
+      generatedAt: new Date().toISOString(),
+      appVersion: APP_VERSION,
+      nodeVersion: process.version,
+      platform: `${process.platform}-${process.arch}`,
+      proxy: {
+        installed: proxy.installed,
+        running: proxy.running,
+        managed: proxy.managed,
+        endpoint: proxy.endpoint,
+        compatibility: proxy.compatibility,
+      },
+      codex: {
+        home: diagnosticPath(liveHome),
+        provider: config.match(/^\s*model_provider\s*=\s*"([^"]+)"/m)?.[1] || "unknown",
+        model: config.match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1] || "unknown",
+        configSha256: await hashFile(configPath),
+        authSha256: await hashFile(authPath),
+        takeoverState: runtime.settings.codexActiveBackup ? "active" : "inactive",
+      },
+      security: runtime.security,
+      history: {
+        available: history.available,
+        total: history.total,
+        providers: history.providers || [],
+        migrationEnabled: false,
+      },
+      paths: {
+        dataDir: diagnosticPath(DATA_DIR),
+        proxyBinary: diagnosticPath(detectProxyBinary()),
+      },
+      errors: runtime.errors.map((entry) => ({ ...entry, message: redact(entry.message) })),
+    };
+    await writeJson(path.join(stagingDir, "summary.json"), summary);
+    await writeJson(path.join(stagingDir, "logs.json"), runtime.logs.map((entry) => ({
+      ...entry,
+      message: redact(entry.message),
+    })));
+    await atomicWrite(path.join(stagingDir, "README.txt"), [
+      "Antigravity Codex Bridge redacted diagnostics",
+      "Contains metadata, hashes, provider/model names, and redacted in-memory logs only.",
+      "Does not contain OAuth credentials, API keys, conversation text, auth.json, or config.toml contents.",
+      "",
+    ].join("\r\n"));
+    await execFileAsync("tar.exe", ["-a", "-c", "-f", archivePath, "-C", stagingDir, "."], {
+      windowsHide: true,
+      timeout: 30_000,
+    });
+    addLog("diagnostics", `Created redacted diagnostics: ${diagnosticPath(archivePath)}`);
+    return { archivePath, redacted: true };
+  } finally {
+    await fs.rm(stagingDir, { recursive: true, force: true });
+  }
 }
 
 async function getAccounts(force = false) {
@@ -640,11 +825,17 @@ async function writeCodexLauncher(model = runtime.settings.defaultModel) {
   const script = `$ErrorActionPreference = 'Stop'
 $appId = ${powershellLiteral(preferredAppId)}
 $settingsPath = ${powershellLiteral(SETTINGS_PATH)}
+$secretsPath = ${powershellLiteral(SECRETS_PATH)}
 $bridgeUrl = ${powershellLiteral(`http://${UI_HOST}:${UI_PORT}`)}
 $model = ${powershellLiteral(model)}
 if (-not (Test-Path -LiteralPath $settingsPath)) { throw 'Bridge settings were not found.' }
 $settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-$headers = @{ 'X-Bridge-Key' = $settings.uiKey }
+Add-Type -AssemblyName System.Security
+$encoded = (Get-Content -Raw -LiteralPath $secretsPath).Trim()
+$encrypted = [Convert]::FromBase64String($encoded)
+$bytes = [Security.Cryptography.ProtectedData]::Unprotect($encrypted, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+$secrets = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
+$headers = @{ 'X-Bridge-Key' = $secrets.uiKey }
 $body = @{ model = $model } | ConvertTo-Json
 
 $codexProcesses = Get-Process -Name ChatGPT -ErrorAction SilentlyContinue
@@ -727,16 +918,16 @@ async function prepareCodex(modelRequested = "") {
     port: runtime.settings.proxyPort,
     model,
     catalogPath: CATALOG_PATH,
-    bearerToken: runtime.settings.clientKey,
+    tokenCommandPath: TOKEN_COMMAND_PATH,
   });
   const currentConfig = await fs.readFile(configPath, "utf8").catch(() => "");
   const config = createActiveCodexConfig(currentConfig, {
     port: runtime.settings.proxyPort,
     model,
     catalogPath: CATALOG_PATH,
-    bearerToken: runtime.settings.clientKey,
+    tokenCommandPath: TOKEN_COMMAND_PATH,
   });
-  const auth = createCodexApiAuth(runtime.settings.clientKey);
+  const auth = createCodexApiAuth();
   const backupPath = await backupIfChanged(profilePath, profile);
   await fs.mkdir(codexHome, { recursive: true });
   await applyFiles([
@@ -748,7 +939,7 @@ async function prepareCodex(modelRequested = "") {
   const launcher = await writeCodexLauncher(model);
   runtime.settings.defaultModel = model;
   runtime.settings.codexApiPrepared = true;
-  await writeJson(SETTINGS_PATH, runtime.settings);
+  await saveSettings();
   addLog("codex", `已准备 Codex API Service 暂存配置，默认模型 ${model}`);
   return {
     model,
@@ -791,7 +982,7 @@ async function backupLiveCodex() {
   await writeJson(path.join(backupDir, "manifest.json"), manifest);
   await verifySnapshot(backupDir, manifest);
   runtime.settings.codexActiveBackup = backupDir;
-  await writeJson(SETTINGS_PATH, runtime.settings);
+  await saveSettings();
   return backupDir;
 }
 
@@ -822,7 +1013,7 @@ async function activateCodexConfig(modelRequested = "") {
       await restoreSnapshot(backupPath, manifest);
       await updateSnapshotState(backupPath, manifest, "failed-restored", { failure: error.message });
       runtime.settings.codexActiveBackup = "";
-      await writeJson(SETTINGS_PATH, runtime.settings);
+      await saveSettings();
     } catch (restoreError) {
       throw new AggregateError([error, restoreError], "Codex takeover failed and automatic restore also failed");
     }
@@ -852,7 +1043,7 @@ async function restoreCodexConfig() {
   await restoreSnapshot(backupDir, manifest);
   await updateSnapshotState(backupDir, manifest, "restored");
   runtime.settings.codexActiveBackup = "";
-  await writeJson(SETTINGS_PATH, runtime.settings);
+  await saveSettings();
   addLog("codex", "已恢复 API Service 接管前的 config.toml 和 auth.json");
   return { restored: true, liveHome, backupDir };
 }
@@ -868,7 +1059,7 @@ async function recoverInterruptedTakeover() {
   if (!manifest) throw new Error("The active Codex backup manifest is missing");
   if (["restored", "failed-restored", "recovered"].includes(manifest.state)) {
     runtime.settings.codexActiveBackup = "";
-    await writeJson(SETTINGS_PATH, runtime.settings);
+    await saveSettings();
     return true;
   }
   if (!["prepared", "applying", "restoring"].includes(manifest.state)) return false;
@@ -878,7 +1069,7 @@ async function recoverInterruptedTakeover() {
     recoveryReason: `bridge-started-after-${interruptedState}`,
   });
   runtime.settings.codexActiveBackup = "";
-  await writeJson(SETTINGS_PATH, runtime.settings);
+  await saveSettings();
   addLog("recovery", `Recovered interrupted Codex takeover from ${backupDir}`);
   return true;
 }
@@ -930,7 +1121,7 @@ async function reapplyPreparedCodex() {
     await restoreSnapshot(backupDir, manifest);
     await updateSnapshotState(backupDir, manifest, "failed-restored", { failure: error.message });
     runtime.settings.codexActiveBackup = "";
-    await writeJson(SETTINGS_PATH, runtime.settings);
+    await saveSettings();
     throw error;
   }
   return { active: true, model: manifest.selectedModel || runtime.settings.defaultModel };
@@ -984,6 +1175,7 @@ async function launchCodex(modelRequested = "") {
 
 async function proxyState() {
   const running = await proxyHealth();
+  const compatibility = await inspectProxyCompatibility();
   return {
     installed: Boolean(detectProxyBinary()),
     binaryPath: detectProxyBinary(),
@@ -994,11 +1186,13 @@ async function proxyState() {
     pid: runtime.proxyProcess?.pid || null,
     install: runtime.install,
     endpoint: `http://127.0.0.1:${runtime.settings.proxyPort}/v1`,
+    compatibility,
   };
 }
 
 async function dashboard() {
   const proxy = await proxyState();
+  const history = await getHistory();
   const liveHome = liveCodexHomePath();
   const activeConfigPath = path.join(liveHome, "config.toml");
   const activeAuthPath = path.join(liveHome, "auth.json");
@@ -1007,6 +1201,9 @@ async function dashboard() {
     : null;
   const activeConfig = await fs.readFile(activeConfigPath, "utf8").catch(() => "");
   const activeAuth = await readJson(activeAuthPath, null);
+  const selectedModel = activeConfig.match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1]
+    || runtime.settings.defaultModel
+    || "";
   const backupMatches = backupManifest
     && path.resolve(backupManifest.liveHome || "") === liveHome;
   let accounts = [];
@@ -1017,15 +1214,18 @@ async function dashboard() {
   return {
     app: { name: "Antigravity Codex Bridge", version: APP_VERSION },
     proxy,
+    security: runtime.security,
+    history,
     settings: publicSettings(),
     accounts,
-    models,
+    models: models.map((model) => ({ ...model, capabilities: modelCapabilities(model.id) })),
     quotaRefreshing: runtime.quotaRefreshing,
     codex: {
       active: Boolean(backupMatches
         && activeConfig.includes('model_provider = "antigravity_local"')
         && activeAuth?.auth_mode === "apikey"),
       restoreAvailable: Boolean(backupManifest),
+      selectedModel,
       configPath: activeConfigPath,
       authPath: activeAuthPath,
       preparedHome: codexHomePath(),
@@ -1042,6 +1242,7 @@ async function dashboard() {
       codexHome: codexHomePath(),
       liveCodexHome: liveCodexHomePath(),
       codexLauncher: CODEX_LAUNCHER_PATH,
+      protectedSecrets: SECRETS_PATH,
     },
   };
 }
@@ -1087,6 +1288,9 @@ async function handleApi(request, response, url) {
   const key = `${request.method} ${url.pathname}`;
   let result;
   if (key === "GET /api/dashboard") result = await dashboard();
+  else if (key === "GET /api/history") result = await getHistory(true);
+  else if (key === "POST /api/diagnostics") result = await createDiagnostics();
+  else if (key === "GET /api/proxy/compatibility") result = await inspectProxyCompatibility(true);
   else if (key === "POST /api/proxy/install") result = await installProxy();
   else if (key === "POST /api/proxy/start") result = await startProxy();
   else if (key === "POST /api/proxy/stop") result = await stopProxy();
@@ -1108,7 +1312,7 @@ async function handleApi(request, response, url) {
     const next = validateSettings(body);
     if (await proxyHealth() && next.proxyPort !== runtime.settings.proxyPort) throw new Error("请先停止核心，再修改代理端口");
     runtime.settings = next;
-    await writeJson(SETTINGS_PATH, runtime.settings);
+    await saveSettings();
     result = { settings: publicSettings() };
   } else if (key === "POST /api/codex/prepare") {
     const body = await readBody(request);

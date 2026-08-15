@@ -80,17 +80,20 @@ test("models normalize, deduplicate and produce a Codex catalog", () => {
   assert.equal(catalog.models.find((model) => model.slug === "gemini-3-flash").display_name, "Gemini 3 Flash");
 });
 
-test("Codex profile uses Responses API and a local API key", () => {
+test("Codex profile uses Responses API and a protected token command", () => {
   const profile = createCodexProfile({
     port: 8317,
     model: "gemini-3-flash",
     catalogPath: "D:\\Data\\models.json",
-    bearerToken: "local-secret",
+    tokenCommandPath: "D:\\Data\\get-token.ps1",
   });
   assert.match(profile, /model_provider = "antigravity_local"/);
   assert.match(profile, /base_url = "http:\/\/127\.0\.0\.1:8317\/v1"/);
   assert.match(profile, /name = "Codex API Service"/);
-  assert.match(profile, /experimental_bearer_token = "local-secret"/);
+  assert.match(profile, /\[model_providers\.antigravity_local\.auth\]/);
+  assert.match(profile, /command = "powershell\.exe"/);
+  assert.match(profile, /D:\/Data\/get-token\.ps1/);
+  assert.doesNotMatch(profile, /local-secret|experimental_bearer_token/);
   assert.match(profile, /wire_api = "responses"/);
   assert.match(profile, /requires_openai_auth = false/);
   assert.match(profile, /\[windows\]\nsandbox = "unelevated"/);
@@ -101,7 +104,7 @@ test("Codex API Service auth uses API key mode without OAuth tokens", () => {
   const auth = JSON.parse(createCodexApiAuth("local-secret"));
   assert.deepEqual(auth, {
     auth_mode: "apikey",
-    OPENAI_API_KEY: "local-secret",
+    OPENAI_API_KEY: "codex-api-service",
   });
   assert.equal(auth.tokens, undefined);
 });
@@ -127,7 +130,7 @@ sandbox = "elevated"
     port: 8317,
     model: "gemini-3-flash",
     catalogPath: "D:\\Data\\models.json",
-    bearerToken: "local-secret",
+    tokenCommandPath: "D:\\Data\\get-token.ps1",
   });
 
   assert.equal(config.match(/^model_provider\s*=/gm)?.length, 1);
@@ -135,7 +138,9 @@ sandbox = "elevated"
   assert.match(config, /model = "gemini-3-flash"/);
   assert.match(config, /model_provider = "antigravity_local"/);
   assert.match(config, /\[model_providers\.antigravity_local\]/);
-  assert.match(config, /experimental_bearer_token = "local-secret"/);
+  assert.match(config, /\[model_providers\.antigravity_local\.auth\]/);
+  assert.match(config, /D:\/Data\/get-token\.ps1/);
+  assert.doesNotMatch(config, /local-secret/);
   assert.match(config, /requires_openai_auth = false/);
   assert.match(config, /\[mcp_servers\.demo\]\ncommand = "demo"/);
   assert.match(config, /service_tier = "default"/);
@@ -156,4 +161,13 @@ test("active Codex config adds the unelevated Windows fallback when absent", () 
   });
 
   assert.match(config, /\[windows\]\nsandbox = "unelevated"/);
+});
+
+test("fresh model selection prefers Gemini 3.7 Flash High", () => {
+  const models = [
+    { id: "gemini-3.1-pro-low" },
+    { id: "gemini-3.7-flash-high" },
+    { id: "claude-sonnet-4-6" },
+  ];
+  assert.equal(chooseDefaultModel(models), "gemini-3.7-flash-high");
 });

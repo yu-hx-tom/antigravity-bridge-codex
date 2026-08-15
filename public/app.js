@@ -63,13 +63,33 @@ function renderBusy() {
   $("#refreshQuota").disabled = busy.has("quota") || dashboard?.quotaRefreshing;
   $("#prepareProfile").disabled = busy.has("prepare");
   $("#restoreCodex").disabled = busy.size > 0 || !dashboard?.codex?.restoreAvailable;
+  $("#createDiagnostics").disabled = busy.has("diagnostics");
 }
 
 function timeText(value) {
   if (!value) return "尚未刷新";
-  const date = new Date(value);
+  const normalized = typeof value === "number" && value < 1_000_000_000_000 ? value * 1000 : value;
+  const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function renderHistory(history) {
+  const summary = $("#historySummary");
+  const target = $("#historyList");
+  if (!history?.available) {
+    summary.textContent = history?.reason || "当前 Codex Home 没有 state_5.sqlite";
+    target.innerHTML = '<div class="empty-state"><span>04</span><h3>没有可读取的历史索引</h3><p>历史文件不会被创建、移动或删除。</p></div>';
+    return;
+  }
+  const providers = (history.providers || []).map((item) => `${item.provider} ${item.count}`).join(" / ");
+  summary.textContent = `共 ${history.total} 个任务 · ${providers}`;
+  target.innerHTML = (history.tasks || []).map((task) => `<article class="history-card ${task.readOnly ? "readonly" : "local"}">
+    <div class="history-title"><strong>${escapeHtml(task.title)}</strong><span>${task.readOnly ? "只读" : "可继续"}</span></div>
+    <div class="history-tags"><code>${escapeHtml(task.provider)}</code><code>${escapeHtml(task.model)}</code>${task.archived ? "<em>已归档</em>" : ""}</div>
+    <p>${escapeHtml(task.policy)}</p>
+    <time>${escapeHtml(timeText(task.updatedAt))}</time>
+  </article>`).join("");
 }
 
 function accountHealth(account) {
@@ -174,7 +194,7 @@ function render(data) {
   $("#metricAccounts").textContent = String(data.accounts.length);
   $("#metricModels").textContent = String(data.models.length);
   $("#metricProfile").textContent = data.codex.active ? "ACTIVE" : "SAFE";
-  $("#metricProfileSub").textContent = data.codex.active ? "等待完全退出并重启 Codex" : "尚未应用";
+  $("#metricProfileSub").textContent = data.codex.active ? (data.codex.selectedModel || "Antigravity") : "尚未应用";
   $("#coreStatus").textContent = online ? "服务运行中" : proxy.installed ? "核心已安装" : "等待安装核心";
   $("#corePill").textContent = online ? "ONLINE" : proxy.install.running ? "INSTALLING" : "OFFLINE";
   $("#corePill").classList.toggle("online", online);
@@ -190,6 +210,7 @@ function render(data) {
   $("#dataPath").textContent = `运行数据：${data.paths.dataDir}`;
   renderAccounts(data.accounts);
   renderModels(data.models, data.settings.defaultModel);
+  renderHistory(data.history);
   renderLogs(data.logs);
   loadSettings(data);
   renderBusy();
@@ -278,6 +299,13 @@ $("#restoreCodex").addEventListener("click", () => {
   if (!window.confirm("恢复接管前的 config.toml 和 auth.json？请先完全退出 Codex。")) return;
   runBusy("restore", () => api("/api/codex/restore", { method: "POST", body: "{}" }), "原 Codex 配置与登录凭据已恢复").catch(() => {});
 });
+
+$("#createDiagnostics").addEventListener("click", () => runBusy("diagnostics", async () => {
+  const result = await api("/api/diagnostics", { method: "POST", body: "{}" });
+  $("#diagnosticsPath").textContent = result.archivePath;
+  showToast("脱敏诊断包已生成");
+  return result;
+}).catch(() => {}));
 
 $("#settingsForm").addEventListener("submit", (event) => {
   event.preventDefault();

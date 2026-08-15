@@ -178,6 +178,20 @@ select:focus, input:focus { border-color: var(--signal); box-shadow: 0 0 0 3px r
 .chips span { padding: 7px 10px; border: 1px solid var(--line); border-radius: 99px; background: var(--paper-bright); font: 9px Consolas, monospace; }
 .chips span.selected { border-color: var(--signal); color: var(--signal-deep); background: rgba(233, 88, 43, .07); }
 
+.history-summary { margin: 20px 0 12px; color: var(--ink-soft); font: 10px Consolas, monospace; }
+.history-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-height: 520px; overflow: auto; }
+.history-card { position: relative; border: 1px solid var(--line); border-radius: 16px; padding: 18px; background: rgba(250, 248, 240, .8); }
+.history-card.readonly { border-left: 3px solid var(--warn); }
+.history-card.local { border-left: 3px solid var(--good); }
+.history-title { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.history-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-title span { flex: 0 0 auto; padding: 4px 7px; border-radius: 99px; background: rgba(187, 122, 24, .1); color: var(--warn); font-size: 8px; font-weight: 800; }
+.history-card.local .history-title span { background: rgba(43, 127, 98, .1); color: var(--good); }
+.history-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 11px 0; }
+.history-tags code, .history-tags em { padding: 4px 7px; border-radius: 7px; background: rgba(23, 52, 47, .06); color: var(--ink-soft); font-size: 8px; font-style: normal; }
+.history-card p { margin: 0 0 10px; color: var(--ink-soft); font-size: 10px; line-height: 1.5; }
+.history-card time { color: var(--ink-soft); font-size: 8px; }
+
 .settings-section details { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; padding: 24px 0; list-style: none; }
 summary::-webkit-details-marker { display: none; }
@@ -217,7 +231,7 @@ footer { display: flex; justify-content: space-between; padding: 24px max(28px, 
   .metrics { grid-template-columns: 1fr 1fr; }
   .metrics article:nth-child(2) { border-right: 0; }
   .metrics article:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-  .core-grid, .model-layout { grid-template-columns: 1fr; }
+  .core-grid, .model-layout, .history-list { grid-template-columns: 1fr; }
   .account-main { grid-template-columns: 1fr; gap: 18px; }
   .account-actions { justify-content: flex-start; }
 }

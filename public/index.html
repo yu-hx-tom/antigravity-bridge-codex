@@ -12,7 +12,7 @@
   <header class="topbar">
     <a class="brand" href="#top" aria-label="返回顶部">
       <span class="brand-mark">A/G</span>
-      <span>LOCAL BRIDGE <small>0.1</small></span>
+      <span>LOCAL BRIDGE <small>0.2</small></span>
     </a>
     <div class="top-status">
       <span class="signal" id="topSignal"></span>
@@ -133,9 +133,22 @@
       </div>
     </section>
 
+    <section class="workspace reveal">
+      <div class="section-heading">
+        <div><span class="section-no">04</span><p class="eyebrow">READ-ONLY HISTORY</p><h2>历史任务</h2></div>
+        <p>只读取本地任务元数据，不复制、不迁移、不修改原 Provider。非 Antigravity 创建的旧任务默认只读，避免让 Gemini 续写官方模型上下文。</p>
+      </div>
+      <div class="notice">
+        <b>历史迁移默认关闭</b>
+        <span>旧任务继续保留在原 Codex Home；实验迁移必须先完整备份 SQLite、sessions 与索引文件，并支持一键回退。</span>
+      </div>
+      <p class="history-summary" id="historySummary">正在读取本地历史索引</p>
+      <div class="history-list" id="historyList"></div>
+    </section>
+
     <section class="workspace settings-section reveal">
       <details>
-        <summary><span><b>04</b> 高级设置</span><small>端口、核心路径与 Codex 桌面端路径</small></summary>
+        <summary><span><b>05</b> 高级设置</span><small>端口、核心路径与 Codex 桌面端路径</small></summary>
         <form id="settingsForm" class="settings-grid">
           <label class="wide"><span>Codex Home（桌面端实际配置目录）</span><input id="codexHome" name="codexHome" type="text" placeholder="D:\codex-home"></label>
           <label class="wide"><span>Codex 桌面端路径（可留空自动检测）</span><input id="codexAppPath" name="codexAppPath" type="text" placeholder="...\\app\\ChatGPT.exe"></label>
@@ -148,9 +161,9 @@
     </section>
 
     <section class="workspace diagnostics reveal">
-      <div class="section-heading">
-        <div><span class="section-no">05</span><p class="eyebrow">DIAGNOSTICS</p><h2>最近运行记录</h2></div>
-        <p>只保留本次管理进程最近 80 条；常见令牌字段会被脱敏。</p>
+      <div class="section-heading heading-actions">
+        <div><span class="section-no">06</span><p class="eyebrow">DIAGNOSTICS</p><h2>最近运行记录</h2></div>
+        <div><button class="button ghost" id="createDiagnostics" type="button">生成脱敏诊断包</button><p class="micro" id="diagnosticsPath">不包含密钥与对话正文</p></div>
       </div>
       <div class="log-window" id="logWindow"><p><time>--:--:--</time><span>APP</span> 等待运行事件</p></div>
     </section>

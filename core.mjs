@@ -1,4 +1,5 @@
 import path from "node:path";
+import { modelCapabilities } from "./protocol.mjs";
 
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -121,9 +122,7 @@ export function extractProjectId(payload) {
 }
 
 function contextWindowFor(modelId) {
-  if (/gemini/i.test(modelId)) return 1_048_576;
-  if (/claude/i.test(modelId)) return 200_000;
-  return 200_000;
+  return modelCapabilities(modelId).contextWindow;
 }
 
 function displayNameFor(modelId) {
@@ -155,6 +154,7 @@ export function createModelCatalog(models) {
     models: models.map((model, index) => {
       const contextWindow = contextWindowFor(model.id);
       const reasoning = reasoningFor(model.id);
+      const capabilities = modelCapabilities(model.id);
       return {
         slug: model.id,
         display_name: model.displayName && model.displayName !== model.id
@@ -183,14 +183,14 @@ export function createModelCatalog(models) {
         apply_patch_tool_type: "freeform",
         web_search_tool_type: "text_and_image",
         truncation_policy: { mode: "tokens", limit: 10_000 },
-        supports_parallel_tool_calls: true,
-        supports_image_detail_original: true,
+        supports_parallel_tool_calls: capabilities.parallelTools,
+        supports_image_detail_original: capabilities.imageInput,
         context_window: contextWindow,
         max_context_window: contextWindow,
         effective_context_window_percent: 95,
         comp_hash: `antigravity-${model.id}`,
         experimental_supported_tools: [],
-        input_modalities: ["text", "image"],
+        input_modalities: capabilities.imageInput ? ["text", "image"] : ["text"],
         supports_search_tool: false,
         use_responses_lite: false,
       };
@@ -198,35 +198,53 @@ export function createModelCatalog(models) {
   };
 }
 
-export function createCodexApiAuth(bearerToken) {
+export function createCodexApiAuth() {
   return `${JSON.stringify({
     auth_mode: "apikey",
-    OPENAI_API_KEY: bearerToken,
+    OPENAI_API_KEY: "codex-api-service",
   }, null, 2)}\n`;
 }
 
-export function createCodexProfile({ port, model, catalogPath, bearerToken }) {
-  return `model_provider = "antigravity_local"
-model = ${tomlString(model)}
-model_catalog_json = ${tomlString(toPortablePath(catalogPath))}
+function codexProvider({ port, bearerToken, tokenCommandPath }) {
+  const bearer = tokenCommandPath ? "" : `
+experimental_bearer_token = ${tomlString(bearerToken)}`;
+  const authCommand = tokenCommandPath ? `
 
-[model_providers.antigravity_local]
+[model_providers.antigravity_local.auth]
+command = "powershell.exe"
+args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ${tomlString(toPortablePath(tokenCommandPath))}]
+timeout_ms = 5000
+refresh_interval_ms = 0` : "";
+  return `[model_providers.antigravity_local]
 name = "Codex API Service"
-base_url = "http://127.0.0.1:${port}/v1"
-experimental_bearer_token = ${tomlString(bearerToken)}
+base_url = "http://127.0.0.1:${port}/v1"${bearer}
 wire_api = "responses"
 requires_openai_auth = false
 request_max_retries = 2
 stream_max_retries = 1
 stream_idle_timeout_ms = 300000
-supports_websockets = false
+supports_websockets = false${authCommand}`;
+}
+
+export function createCodexProfile({ port, model, catalogPath, bearerToken = "", tokenCommandPath = "" }) {
+  return `model_provider = "antigravity_local"
+model = ${tomlString(model)}
+model_catalog_json = ${tomlString(toPortablePath(catalogPath))}
+
+${codexProvider({ port, bearerToken, tokenCommandPath })}
 
 [windows]
 sandbox = "unelevated"
 `;
 }
 
-export function createActiveCodexConfig(current, { port, model, catalogPath, bearerToken }) {
+export function createActiveCodexConfig(current, {
+  port,
+  model,
+  catalogPath,
+  bearerToken = "",
+  tokenCommandPath = "",
+}) {
   const preserved = [];
   let beforeFirstTable = true;
   let skippingManagedProvider = false;
@@ -258,16 +276,7 @@ export function createActiveCodexConfig(current, { port, model, catalogPath, bea
   const active = `model_provider = "antigravity_local"
 model = ${tomlString(model)}
 model_catalog_json = ${tomlString(toPortablePath(catalogPath))}`;
-  const provider = `[model_providers.antigravity_local]
-name = "Codex API Service"
-base_url = "http://127.0.0.1:${port}/v1"
-experimental_bearer_token = ${tomlString(bearerToken)}
-wire_api = "responses"
-requires_openai_auth = false
-request_max_retries = 2
-stream_max_retries = 1
-stream_idle_timeout_ms = 300000
-supports_websockets = false`;
+  const provider = codexProvider({ port, bearerToken, tokenCommandPath });
   const windows = hasWindowsTable ? "" : `[windows]
 sandbox = "unelevated"`;
 
@@ -277,6 +286,8 @@ sandbox = "unelevated"`;
 export function chooseDefaultModel(models, requested = "") {
   if (requested && models.some((model) => model.id === requested)) return requested;
   const preferences = [
+    /gemini-3\.7-flash-high/i,
+    /gemini-3\.6-flash-high/i,
     /gemini-3\.1-pro/i,
     /gemini-3-pro/i,
     /gemini-3\.1-flash/i,

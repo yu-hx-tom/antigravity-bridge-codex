@@ -1,0 +1,11 @@
+{
+  "repository": "router-for-me/CLIProxyAPI",
+  "version": "7.2.132",
+  "tag": "v7.2.132",
+  "commit": "78f0c407",
+  "assets": {
+    "amd64": {
+      "binarySha256": "433ddc18d6fe163fa863579a5400eebf6178d685af6ab9524059b12d396f9e9c"
+    }
+  }
+}
