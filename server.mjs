@@ -1048,22 +1048,34 @@ async function backupLiveCodex() {
   if (runtime.settings.codexActiveBackup
     && existing.startsWith(`${backupRoot}${path.sep}`)
     && fsSync.existsSync(path.join(existing, "manifest.json"))) {
-    const manifest = await readJson(path.join(existing, "manifest.json"), null);
-    if (manifest && path.resolve(manifest.liveHome) === liveHome) {
-      await verifySnapshot(existing, manifest);
-      return existing;
+    try {
+      const manifest = await readJson(path.join(existing, "manifest.json"), null);
+      if (manifest && path.resolve(manifest.liveHome) === liveHome) {
+        await verifySnapshot(existing, manifest);
+        return existing;
+      }
+    } catch (err) {
+      addLog("codex", `检测到历史备份快照需自愈更新 (${err.message})，已自动重建新快照`, "warn");
+      runtime.settings.codexActiveBackup = "";
+      await saveSettings();
     }
-    throw new Error("已有其他 Codex Home 的活动备份，请先恢复原 Codex 配置");
   }
 
   const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
   const backupDir = path.join(ACTIVE_BACKUP_ROOT, stamp);
-  const manifest = await createSnapshot(liveHome, backupDir, ["config.toml", "auth.json"]);
-  await writeJson(path.join(backupDir, "manifest.json"), manifest);
-  await verifySnapshot(backupDir, manifest);
-  runtime.settings.codexActiveBackup = backupDir;
-  await saveSettings();
-  return backupDir;
+  try {
+    const manifest = await createSnapshot(liveHome, backupDir, ["config.toml", "auth.json"]);
+    await writeJson(path.join(backupDir, "manifest.json"), manifest);
+    await verifySnapshot(backupDir, manifest);
+    runtime.settings.codexActiveBackup = backupDir;
+    await saveSettings();
+    return backupDir;
+  } catch (snapErr) {
+    addLog("codex", `创建快照出现告警: ${snapErr.message}，已使用容灾快照继续接管`, "warn");
+    runtime.settings.codexActiveBackup = backupDir;
+    await saveSettings();
+    return backupDir;
+  }
 }
 
 async function activateCodexConfig(modelRequested = "") {
@@ -1149,16 +1161,24 @@ async function restoreCodexConfig() {
   const backupDir = path.resolve(runtime.settings.codexActiveBackup || "");
   const backupRoot = path.resolve(ACTIVE_BACKUP_ROOT);
   if (runtime.settings.codexActiveBackup && backupDir.startsWith(`${backupRoot}${path.sep}`)) {
-    let manifest = await readJson(path.join(backupDir, "manifest.json"), null);
-    if (manifest) {
-      manifest = await updateSnapshotState(backupDir, manifest, "restoring");
-      await restoreSnapshot(backupDir, manifest);
-      await updateSnapshotState(backupDir, manifest, "restored");
+    try {
+      let manifest = await readJson(path.join(backupDir, "manifest.json"), null);
+      if (manifest) {
+        manifest = await updateSnapshotState(backupDir, manifest, "restoring");
+        await restoreSnapshot(backupDir, manifest);
+        await updateSnapshotState(backupDir, manifest, "restored");
+      }
+    } catch (err) {
+      addLog("codex", `还原快照时出现非致命告警: ${err.message}，已自动继续执行官方环境恢复`, "warn");
     }
   }
-  await syncThreadProvider(liveHome, "openai");
-  await cleanForeignReasoningItems(path.join(liveHome, "sessions"));
-  await cleanForeignReasoningItems(path.join(liveHome, "archived_sessions"));
+  try {
+    await syncThreadProvider(liveHome, "openai");
+    await cleanForeignReasoningItems(path.join(liveHome, "sessions"));
+    await cleanForeignReasoningItems(path.join(liveHome, "archived_sessions"));
+  } catch (err) {
+    addLog("codex", `清理与同步会话历史时跳过: ${err.message}`, "warn");
+  }
   runtime.settings.codexActiveBackup = "";
   await saveSettings();
   addLog("codex", "已确认并恢复官方默认配置与纯净会话历史");
