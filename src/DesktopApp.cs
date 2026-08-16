@@ -235,6 +235,8 @@ namespace AntigravityDesktopClient
         private TextBlock txtTps;
         private TextBlock txtTtft;
         private TextBlock dividerBlock;
+        private System.Windows.Shapes.Path iconBolt;
+        private System.Windows.Shapes.Path iconTimer;
         private bool isDockedLeft = false;
         private bool isDockedRight = false;
         private bool isDragging = false;
@@ -277,7 +279,19 @@ namespace AntigravityDesktopClient
 
             // TPS Column
             StackPanel spTps = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-            spTps.Children.Add(new TextBlock { Text = "⚡", FontSize = 11, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            
+            iconBolt = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M 4.5 0 L 0.5 6.5 L 4 6.5 L 3 11.5 L 8.5 4.5 L 5 4.5 Z"),
+                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(251, 191, 36)),
+                Width = 9,
+                Height = 12,
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(0, 0, 5, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spTps.Children.Add(iconBolt);
+
             txtTps = new TextBlock
             {
                 Text = "-- t/s",
@@ -302,7 +316,19 @@ namespace AntigravityDesktopClient
 
             // TTFT Column
             StackPanel spTtft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-            spTtft.Children.Add(new TextBlock { Text = "⏱️", FontSize = 10, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            
+            iconTimer = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M 4 0 L 7 0 L 7 1.2 L 4 1.2 Z M 5.5 1.8 C 2.5 1.8 0 4.3 0 7.3 C 0 10.3 2.5 12.8 5.5 12.8 C 8.5 12.8 11 10.3 11 7.3 C 11 4.3 8.5 1.8 5.5 1.8 Z M 5.5 3 C 7.9 3 9.8 4.9 9.8 7.3 C 9.8 9.7 7.9 11.6 5.5 11.6 C 3.1 11.6 1.2 9.7 1.2 7.3 C 1.2 4.9 3.1 3 5.5 3 Z M 4.8 4.2 L 4.8 7.5 L 7.5 8.8 L 8 7.7 L 6 6.7 L 6 4.2 Z"),
+                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(52, 211, 153)),
+                Width = 10,
+                Height = 12,
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(0, 0, 5, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spTtft.Children.Add(iconTimer);
+
             txtTtft = new TextBlock
             {
                 Text = "-- ms",
@@ -444,6 +470,16 @@ namespace AntigravityDesktopClient
                 if (dividerBlock != null)
                 {
                     dividerBlock.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromArgb(120, 71, 85, 105) : System.Windows.Media.Color.FromArgb(140, 203, 213, 225));
+                }
+
+                if (iconBolt != null)
+                {
+                    iconBolt.Fill = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(251, 191, 36) : System.Windows.Media.Color.FromRgb(217, 119, 6));
+                }
+
+                if (iconTimer != null)
+                {
+                    iconTimer.Fill = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(52, 211, 153) : System.Windows.Media.Color.FromRgb(5, 150, 105));
                 }
 
                 UpdateTelemetry(lastTps, lastTtft);
