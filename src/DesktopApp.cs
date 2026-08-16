@@ -232,6 +232,12 @@ namespace AntigravityDesktopClient
     public class FloatingHudWindow : Window
     {
         private Border pillBorder;
+        private Canvas circleCanvas;
+        private System.Windows.Shapes.Ellipse outerTrack;
+        private System.Windows.Shapes.Ellipse innerTrack;
+        private System.Windows.Shapes.Path pathOuterArc;
+        private System.Windows.Shapes.Path pathInnerArc;
+        private TextBlock txtQuotaPercent;
         private TextBlock txtTps;
         private TextBlock txtTtft;
         private TextBlock dividerBlock;
@@ -243,6 +249,8 @@ namespace AntigravityDesktopClient
         private bool isDarkTheme = false;
         private double lastTps = 0;
         private int lastTtft = 0;
+        private int lastQuota5h = -1;
+        private int lastQuotaWeekly = -1;
 
         public Action OpenMainWindowAction;
         public Action OpenSettingsAction;
@@ -256,8 +264,8 @@ namespace AntigravityDesktopClient
             Background = System.Windows.Media.Brushes.Transparent;
             Topmost = true;
             ShowInTaskbar = false;
-            Width = 196;
-            Height = 36;
+            Width = 216;
+            Height = 40;
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
@@ -267,15 +275,83 @@ namespace AntigravityDesktopClient
             pillBorder = new Border
             {
                 BorderThickness = new Thickness(1.2),
-                CornerRadius = new CornerRadius(18),
-                Padding = new Thickness(12, 0, 12, 0),
+                CornerRadius = new CornerRadius(20),
+                Padding = new Thickness(4, 0, 10, 0),
                 Cursor = Cursors.SizeAll
             };
 
-            Grid grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid mainGrid = new Grid();
+            mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
+            mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            // 1. Dual Concentric Ring (Left)
+            circleCanvas = new Canvas
+            {
+                Width = 34,
+                Height = 34,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            outerTrack = new System.Windows.Shapes.Ellipse
+            {
+                Width = 28,
+                Height = 28,
+                StrokeThickness = 2.0
+            };
+            Canvas.SetLeft(outerTrack, 3);
+            Canvas.SetTop(outerTrack, 3);
+            circleCanvas.Children.Add(outerTrack);
+
+            pathOuterArc = new System.Windows.Shapes.Path
+            {
+                StrokeThickness = 2.2,
+                StrokeLineJoin = PenLineJoin.Round,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round
+            };
+            circleCanvas.Children.Add(pathOuterArc);
+
+            innerTrack = new System.Windows.Shapes.Ellipse
+            {
+                Width = 20,
+                Height = 20,
+                StrokeThickness = 1.8
+            };
+            Canvas.SetLeft(innerTrack, 7);
+            Canvas.SetTop(innerTrack, 7);
+            circleCanvas.Children.Add(innerTrack);
+
+            pathInnerArc = new System.Windows.Shapes.Path
+            {
+                StrokeThickness = 2.0,
+                StrokeLineJoin = PenLineJoin.Round,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round
+            };
+            circleCanvas.Children.Add(pathInnerArc);
+
+            txtQuotaPercent = new TextBlock
+            {
+                Text = "--%",
+                FontSize = 8.8,
+                FontWeight = FontWeights.Bold,
+                Width = 34,
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Canvas.SetLeft(txtQuotaPercent, 0);
+            Canvas.SetTop(txtQuotaPercent, 10.5);
+            circleCanvas.Children.Add(txtQuotaPercent);
+
+            Grid.SetColumn(circleCanvas, 0);
+            mainGrid.Children.Add(circleCanvas);
+
+            // 2. Telemetry Section (Right)
+            Grid metricsGrid = new Grid { VerticalAlignment = VerticalAlignment.Center };
+            metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             // TPS Column
             StackPanel spTps = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
@@ -284,10 +360,10 @@ namespace AntigravityDesktopClient
             {
                 Data = Geometry.Parse("M 4.5 0 L 0.5 6.5 L 4 6.5 L 3 11.5 L 8.5 4.5 L 5 4.5 Z"),
                 Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(251, 191, 36)),
-                Width = 9,
-                Height = 12,
+                Width = 8,
+                Height = 11,
                 Stretch = Stretch.Uniform,
-                Margin = new Thickness(0, 0, 5, 0),
+                Margin = new Thickness(0, 0, 4, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             spTps.Children.Add(iconBolt);
@@ -295,24 +371,24 @@ namespace AntigravityDesktopClient
             txtTps = new TextBlock
             {
                 Text = "-- t/s",
-                FontSize = 11.5,
+                FontSize = 11,
                 FontWeight = FontWeights.Bold,
                 VerticalAlignment = VerticalAlignment.Center
             };
             spTps.Children.Add(txtTps);
             Grid.SetColumn(spTps, 0);
-            grid.Children.Add(spTps);
+            metricsGrid.Children.Add(spTps);
 
             // Divider
             dividerBlock = new TextBlock
             {
                 Text = "|",
-                FontSize = 10,
+                FontSize = 9.5,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0, 4, 0)
+                Margin = new Thickness(3, 0, 3, 0)
             };
             Grid.SetColumn(dividerBlock, 1);
-            grid.Children.Add(dividerBlock);
+            metricsGrid.Children.Add(dividerBlock);
 
             // TTFT Column
             StackPanel spTtft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
@@ -321,10 +397,10 @@ namespace AntigravityDesktopClient
             {
                 Data = Geometry.Parse("M 4 0 L 7 0 L 7 1.2 L 4 1.2 Z M 5.5 1.8 C 2.5 1.8 0 4.3 0 7.3 C 0 10.3 2.5 12.8 5.5 12.8 C 8.5 12.8 11 10.3 11 7.3 C 11 4.3 8.5 1.8 5.5 1.8 Z M 5.5 3 C 7.9 3 9.8 4.9 9.8 7.3 C 9.8 9.7 7.9 11.6 5.5 11.6 C 3.1 11.6 1.2 9.7 1.2 7.3 C 1.2 4.9 3.1 3 5.5 3 Z M 4.8 4.2 L 4.8 7.5 L 7.5 8.8 L 8 7.7 L 6 6.7 L 6 4.2 Z"),
                 Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(52, 211, 153)),
-                Width = 10,
-                Height = 12,
+                Width = 9,
+                Height = 11,
                 Stretch = Stretch.Uniform,
-                Margin = new Thickness(0, 0, 5, 0),
+                Margin = new Thickness(0, 0, 4, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             spTtft.Children.Add(iconTimer);
@@ -332,15 +408,18 @@ namespace AntigravityDesktopClient
             txtTtft = new TextBlock
             {
                 Text = "-- ms",
-                FontSize = 11.5,
+                FontSize = 11,
                 FontWeight = FontWeights.Bold,
                 VerticalAlignment = VerticalAlignment.Center
             };
             spTtft.Children.Add(txtTtft);
             Grid.SetColumn(spTtft, 2);
-            grid.Children.Add(spTtft);
+            metricsGrid.Children.Add(spTtft);
 
-            pillBorder.Child = grid;
+            Grid.SetColumn(metricsGrid, 1);
+            mainGrid.Children.Add(metricsGrid);
+
+            pillBorder.Child = mainGrid;
             Content = pillBorder;
 
             ApplyTheme(false);
@@ -434,10 +513,29 @@ namespace AntigravityDesktopClient
             ContextMenu = cm;
         }
 
+        private Geometry CreateArcGeometry(double centerX, double centerY, double radius, double startAngle, double endAngle)
+        {
+            if (endAngle <= startAngle) return new PathGeometry();
+            double startRad = (startAngle - 90) * Math.PI / 180.0;
+            double endRad = (endAngle - 90) * Math.PI / 180.0;
+
+            System.Windows.Point startPoint = new System.Windows.Point(centerX + radius * Math.Cos(startRad), centerY + radius * Math.Sin(startRad));
+            System.Windows.Point endPoint = new System.Windows.Point(centerX + radius * Math.Cos(endRad), centerY + radius * Math.Sin(endRad));
+
+            bool isLargeArc = (endAngle - startAngle) > 180.0;
+
+            PathFigure figure = new PathFigure { StartPoint = startPoint, IsClosed = false };
+            figure.Segments.Add(new ArcSegment(endPoint, new System.Windows.Size(radius, radius), 0, isLargeArc, SweepDirection.Clockwise, true));
+
+            PathGeometry geometry = new PathGeometry();
+            geometry.Figures.Add(figure);
+            return geometry;
+        }
+
         public void ApplyTheme(bool isDark)
         {
             this.isDarkTheme = isDark;
-            Dispatcher.Invoke(() =>
+            Dispatcher.Invoke(new Action(() =>
             {
                 if (pillBorder != null)
                 {
@@ -467,6 +565,21 @@ namespace AntigravityDesktopClient
                     }
                 }
 
+                if (outerTrack != null)
+                {
+                    outerTrack.Stroke = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(51, 65, 85) : System.Windows.Media.Color.FromRgb(226, 232, 240));
+                }
+
+                if (innerTrack != null)
+                {
+                    innerTrack.Stroke = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(30, 41, 59) : System.Windows.Media.Color.FromRgb(241, 245, 249));
+                }
+
+                if (txtQuotaPercent != null)
+                {
+                    txtQuotaPercent.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(248, 250, 252) : System.Windows.Media.Color.FromRgb(15, 23, 42));
+                }
+
                 if (dividerBlock != null)
                 {
                     dividerBlock.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromArgb(120, 71, 85, 105) : System.Windows.Media.Color.FromArgb(140, 203, 213, 225));
@@ -482,8 +595,8 @@ namespace AntigravityDesktopClient
                     iconTimer.Fill = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(52, 211, 153) : System.Windows.Media.Color.FromRgb(5, 150, 105));
                 }
 
-                UpdateTelemetry(lastTps, lastTtft);
-            });
+                UpdateData(lastTps, lastTtft, lastQuota5h, lastQuotaWeekly);
+            }));
         }
 
         public void CheckDocking()
@@ -555,9 +668,17 @@ namespace AntigravityDesktopClient
 
         public void UpdateTelemetry(double tps, int ttft)
         {
+            UpdateData(tps, ttft, lastQuota5h, lastQuotaWeekly);
+        }
+
+        public void UpdateData(double tps, int ttft, int quota5h, int quotaWeekly)
+        {
             lastTps = tps;
             lastTtft = ttft;
-            Dispatcher.Invoke(() =>
+            lastQuota5h = quota5h;
+            lastQuotaWeekly = quotaWeekly;
+
+            Dispatcher.Invoke(new Action(() =>
             {
                 if (tps > 0)
                 {
@@ -580,7 +701,53 @@ namespace AntigravityDesktopClient
                     txtTtft.Text = "-- ms";
                     txtTtft.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(100, 116, 139));
                 }
-            });
+
+                // Update Dual Concentric Circles
+                if (quotaWeekly >= 0)
+                {
+                    double wAngle = Math.Min(quotaWeekly, 100) * 359.9 / 100.0;
+                    pathOuterArc.Data = CreateArcGeometry(17, 17, 14, 0, Math.Max(wAngle, 1.0));
+                    pathOuterArc.Stroke = (quotaWeekly >= 50)
+                        ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(16, 185, 129)) // Emerald
+                        : ((quotaWeekly >= 20)
+                            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(245, 158, 11)) // Amber
+                            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(239, 68, 68))); // Red
+                }
+                else
+                {
+                    pathOuterArc.Data = null;
+                }
+
+                if (quota5h >= 0)
+                {
+                    double hAngle = Math.Min(quota5h, 100) * 359.9 / 100.0;
+                    pathInnerArc.Data = CreateArcGeometry(17, 17, 10, 0, Math.Max(hAngle, 1.0));
+                    pathInnerArc.Stroke = (quota5h >= 50)
+                        ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(6, 182, 212)) // Cyan
+                        : ((quota5h >= 20)
+                            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(251, 191, 36)) // Amber
+                            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(244, 63, 94))); // Rose
+                }
+                else
+                {
+                    pathInnerArc.Data = null;
+                }
+
+                int displayPercent = (quota5h >= 0 && quotaWeekly >= 0)
+                    ? Math.Min(quota5h, quotaWeekly)
+                    : (quota5h >= 0 ? quota5h : (quotaWeekly >= 0 ? quotaWeekly : -1));
+
+                if (displayPercent >= 0)
+                {
+                    txtQuotaPercent.Text = displayPercent + "%";
+                    txtQuotaPercent.FontSize = (displayPercent == 100) ? 7.8 : 8.8;
+                }
+                else
+                {
+                    txtQuotaPercent.Text = "--%";
+                    txtQuotaPercent.FontSize = 8.2;
+                }
+            }));
         }
     }
 
@@ -2244,11 +2411,6 @@ namespace AntigravityDesktopClient
                 txtMetricLatency.Foreground = new SolidColorBrush(ColTextMuted);
             }
 
-            if (floatingHud != null && floatingHud.IsVisible)
-            {
-                floatingHud.UpdateTelemetry(currentTps, currentTtft);
-            }
-
             // Settings & Round-Robin Mode
             var settings = data.ContainsKey("settings") ? data["settings"] as Dictionary<string, object> : null;
             string currentModel = settings != null && settings.ContainsKey("defaultModel") ? settings["defaultModel"].ToString() : "gemini-3.7-flash-high";
@@ -2265,6 +2427,64 @@ namespace AntigravityDesktopClient
                 }
             }
             UpdateRoundRobinButtonUI();
+
+            // Accounts List & Quota for Floating HUD
+            var accounts = data.ContainsKey("accounts") ? data["accounts"] as ArrayList : null;
+            txtMetricAccounts.Text = accounts != null ? accounts.Count.ToString() : "0";
+
+            int hud5h = -1;
+            int hudWeekly = -1;
+            if (accounts != null && accounts.Count > 0)
+            {
+                for (int i = 0; i < accounts.Count; i++)
+                {
+                    var acc = accounts[i] as Dictionary<string, object>;
+                    if (acc == null) continue;
+                    string email = acc.ContainsKey("email") ? acc["email"].ToString() : "";
+                    string accId = acc.ContainsKey("id") ? acc["id"].ToString() : email;
+                    bool isActive = (accId == activeAccountId || email == activeAccountId || (string.IsNullOrEmpty(activeAccountId) && i == 0));
+                    if (isActive)
+                    {
+                        var quota = acc.ContainsKey("quota") ? acc["quota"] as Dictionary<string, object> : null;
+                        var summary = quota != null && quota.ContainsKey("summary") ? quota["summary"] as Dictionary<string, object>
+                            : (quota != null && quota.ContainsKey("quota_summary") ? quota["quota_summary"] as Dictionary<string, object>
+                            : (quota != null && quota.ContainsKey("quotaSummary") ? quota["quotaSummary"] as Dictionary<string, object> : null));
+                        var qGroups = summary != null && summary.ContainsKey("groups") ? summary["groups"] as IEnumerable : null;
+                        if (qGroups != null)
+                        {
+                            foreach (var gObj in qGroups)
+                            {
+                                var g = gObj as Dictionary<string, object>;
+                                if (g == null) continue;
+                                string gName = g.ContainsKey("displayName") ? g["displayName"].ToString() : "";
+                                var buckets = g.ContainsKey("buckets") ? g["buckets"] as IEnumerable : null;
+                                if (buckets != null && (gName.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0 || hud5h < 0))
+                                {
+                                    foreach (var bObj in buckets)
+                                    {
+                                        var b = bObj as Dictionary<string, object>;
+                                        if (b == null) continue;
+                                        string w = b.ContainsKey("window") ? b["window"].ToString() : (b.ContainsKey("bucketId") ? b["bucketId"].ToString() : "");
+                                        double frac = 1.0;
+                                        if (b.ContainsKey("remainingFraction") && b["remainingFraction"] != null)
+                                        {
+                                            double.TryParse(b["remainingFraction"].ToString(), out frac);
+                                        }
+                                        if (w.Contains("5h") || w.Contains("five")) hud5h = (int)Math.Round(frac * 100);
+                                        else if (w.Contains("week")) hudWeekly = (int)Math.Round(frac * 100);
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (floatingHud != null && floatingHud.IsVisible)
+            {
+                floatingHud.UpdateData(currentTps, currentTtft, hud5h, hudWeekly);
+            }
 
             // Models
             var models = data.ContainsKey("models") ? data["models"] as ArrayList : null;
@@ -2284,11 +2504,7 @@ namespace AntigravityDesktopClient
                 UpdateTrayModelsMenu(modelList, currentModel);
             }
 
-            // Accounts List
-            var accounts = data.ContainsKey("accounts") ? data["accounts"] as ArrayList : null;
-            txtMetricAccounts.Text = accounts != null ? accounts.Count.ToString() : "0";
             RenderAccountsList(accounts);
-
         }
 
         private void UpdateRoundRobinButtonUI()
