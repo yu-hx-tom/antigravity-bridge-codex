@@ -4,19 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { createCodexApiAuth, createCodexProfile } from "../core.mjs";
-import { readProtectedJson } from "../security.mjs";
 
 const dataDir = path.resolve(process.env.BRIDGE_DATA_DIR
   || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "AntigravityCodexBridge"));
-const settings = JSON.parse(await fs.readFile(path.join(dataDir, "settings.json"), "utf8"));
-const secretsPath = path.join(dataDir, "secure", "secrets.dpapi");
-const secrets = await readProtectedJson(secretsPath).catch((error) => {
-  if (error.code === "ENOENT" && settings.clientKey) return settings;
-  throw error;
-});
+const settings = JSON.parse(await fs.readFile(path.join(dataDir, "settings.json"), "utf8").catch(() => "{}"));
+const clientKey = settings.clientKey || "";
 const endpoint = `http://127.0.0.1:${settings.proxyPort || 8317}/v1/models`;
+
 try {
-  const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${secrets.clientKey}` }, signal: AbortSignal.timeout(2_000) });
+  const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${clientKey}` }, signal: AbortSignal.timeout(2_000) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
 } catch (error) {
   console.log(JSON.stringify({ status: "skip", reason: `proxy offline: ${error.message}` }, null, 2));
@@ -27,7 +23,6 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-codex-tools-")
 const codexHome = path.join(root, "home");
 const workspace = path.join(root, "workspace");
 const catalogPath = path.join(dataDir, "codex-model-catalog.json");
-const tokenCommandPath = path.join(dataDir, "secure", "get-client-token.ps1");
 const codexJs = path.join(process.env.APPDATA || "", "npm", "node_modules", "@openai", "codex", "bin", "codex.js");
 await fs.mkdir(codexHome, { recursive: true });
 await fs.mkdir(workspace, { recursive: true });
@@ -35,7 +30,7 @@ await fs.writeFile(path.join(codexHome, "config.toml"), createCodexProfile({
   port: settings.proxyPort || 8317,
   model: process.env.BRIDGE_MODEL || settings.defaultModel,
   catalogPath,
-  tokenCommandPath,
+  bearerToken: clientKey,
 }));
 await fs.writeFile(path.join(codexHome, "auth.json"), createCodexApiAuth());
 

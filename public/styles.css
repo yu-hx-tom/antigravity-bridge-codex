@@ -154,12 +154,16 @@ h1 em { color: var(--signal); font-style: italic; }
 .health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
 .health-dot.warn { background: var(--warn); }
 .health-dot.bad { background: var(--bad); }
-.quota-bars { display: grid; gap: 8px; }
-.quota-row { display: grid; grid-template-columns: minmax(110px, 1fr) 1.4fr 48px; gap: 10px; align-items: center; font-size: 9px; }
-.quota-row > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bar { height: 6px; border-radius: 99px; background: rgba(23, 52, 47, .1); overflow: hidden; }
-.bar i { display: block; height: 100%; background: var(--good); border-radius: inherit; }
-.bar i.low { background: var(--signal); }
+.quota-rings { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 6px; }
+.quota-ring-item { display: flex; align-items: center; gap: 9px; padding: 6px 11px; border-radius: 11px; background: rgba(23, 52, 47, .03); border: 1px solid rgba(23, 52, 47, .07); }
+.ring-svg { width: 32px; height: 32px; transform: rotate(-90deg); flex: 0 0 auto; }
+.ring-bg { fill: none; stroke: rgba(23, 52, 47, .1); stroke-width: 3.8; }
+.ring-fill { fill: none; stroke-width: 3.8; stroke-linecap: round; stroke: var(--good); transition: stroke-dasharray .4s ease; }
+.ring-fill.medium { stroke: var(--warn); }
+.ring-fill.low { stroke: var(--signal); }
+.ring-details { display: flex; flex-direction: column; min-width: 0; }
+.ring-percent { font-size: 13px; font-weight: 800; color: var(--ink); line-height: 1.1; font-family: Consolas, monospace; }
+.ring-label { font-size: 9px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; margin-top: 2px; }
 .account-actions { display: flex; gap: 8px; }
 .account-actions .button { padding: 9px 11px; }
 .quota-meta { border-top: 1px solid var(--line); padding: 9px 26px; color: var(--ink-soft); font-size: 9px; display: flex; justify-content: space-between; }

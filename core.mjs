@@ -1,5 +1,19 @@
 import path from "node:path";
-import { modelCapabilities } from "./protocol.mjs";
+import { modelCapabilities, sanitizeToolSchema, THOUGHT_SIGNATURE_SENTINEL } from "./protocol.mjs";
+
+export { sanitizeToolSchema, THOUGHT_SIGNATURE_SENTINEL };
+
+export const COMMON_MODEL_ALIASES = [
+  { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" },
+  { id: "gpt-5.5", displayName: "GPT-5.5" },
+  { id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" },
+  { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
+  { id: "codex-auto-review", displayName: "Codex Auto Review" },
+  { id: "gpt-4o", displayName: "GPT-4o" },
+  { id: "qwen3.7-plus", displayName: "Qwen 3.7 Plus" },
+  { id: "qwen3-coder-plus", displayName: "Qwen 3 Coder Plus" },
+  { id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro" },
+];
 
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -18,7 +32,11 @@ export function tomlString(value) {
   return `"${String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
-export function createProxyConfig({ port, authDir, clientKey, managementKey }) {
+export function createProxyConfig({ port, authDir, clientKey, managementKey, defaultModel = "gemini-3.7-flash-high" }) {
+  const modelMappings = COMMON_MODEL_ALIASES
+    .map((alias) => `  - from: "${alias.id}"\n    to: "${defaultModel}"`)
+    .join("\n");
+
   return `host: "127.0.0.1"
 port: ${port}
 
@@ -54,6 +72,9 @@ routing:
   strategy: "round-robin"
   session-affinity: true
   session-affinity-ttl: "1h"
+
+model-mapping:
+${modelMappings}
 
 ws-auth: true
 streaming:
@@ -150,8 +171,17 @@ const REASONING_DESCRIPTIONS = {
 };
 
 export function createModelCatalog(models) {
+  const combined = [...models];
+  const existingIds = new Set(models.map((m) => m.id));
+  for (const alias of COMMON_MODEL_ALIASES) {
+    if (!existingIds.has(alias.id)) {
+      combined.push(alias);
+      existingIds.add(alias.id);
+    }
+  }
+
   return {
-    models: models.map((model, index) => {
+    models: combined.map((model, index) => {
       const contextWindow = contextWindowFor(model.id);
       const reasoning = reasoningFor(model.id);
       const capabilities = modelCapabilities(model.id);
@@ -206,107 +236,95 @@ export function createCodexApiAuth() {
 }
 
 function codexProvider({ port, bearerToken, tokenCommandPath }) {
-  const bearer = tokenCommandPath ? "" : `
-experimental_bearer_token = ${tomlString(bearerToken)}`;
-  const authCommand = tokenCommandPath ? `
-
-[model_providers.antigravity_local.auth]
-command = "powershell.exe"
-args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ${tomlString(toPortablePath(tokenCommandPath))}]
-timeout_ms = 5000
-refresh_interval_ms = 0` : "";
-  return `[model_providers.antigravity_local]
-name = "Codex API Service"
-base_url = "http://127.0.0.1:${port}/v1"${bearer}
-wire_api = "responses"
-requires_openai_auth = false
-request_max_retries = 2
-stream_max_retries = 1
-stream_idle_timeout_ms = 300000
-supports_websockets = false${authCommand}`;
+  const provider = [
+    'name = "Codex API Service"',
+    `base_url = "http://127.0.0.1:${port}/v1"`,
+  ];
+  if (bearerToken) {
+    provider.push(`experimental_bearer_token = ${tomlString(bearerToken)}`);
+  } else if (tokenCommandPath) {
+    provider.push(`experimental_bearer_token_command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ${tomlString(toPortablePath(tokenCommandPath))}]`);
+  }
+  provider.push(
+    'wire_api = "responses"',
+    "requires_openai_auth = false",
+    "request_max_retries = 2",
+    "stream_max_retries = 1",
+    "stream_idle_timeout_ms = 300000",
+    "supports_websockets = false",
+  );
+  return provider.join("\n");
 }
 
-export function createCodexProfile({ port, model, catalogPath, bearerToken = "", tokenCommandPath = "" }) {
+export function createCodexProfile({ port, model, catalogPath, bearerToken, tokenCommandPath }) {
   return `model_provider = "antigravity_local"
 model = ${tomlString(model)}
 model_catalog_json = ${tomlString(toPortablePath(catalogPath))}
 
-${codexProvider({ port, bearerToken, tokenCommandPath })}
-
 [windows]
 sandbox = "unelevated"
+
+[model_providers.antigravity_local]
+${codexProvider({ port, bearerToken, tokenCommandPath })}
 `;
 }
 
-export function createActiveCodexConfig(current, {
-  port,
-  model,
-  catalogPath,
-  bearerToken = "",
-  tokenCommandPath = "",
-}) {
-  const preserved = [];
-  let beforeFirstTable = true;
-  let skippingManagedProvider = false;
-  let inWindowsTable = false;
-  let hasWindowsTable = false;
+export function createActiveCodexConfig(originalToml, { port, model, catalogPath, bearerToken, tokenCommandPath }) {
+  const providerBlock = `[model_providers.antigravity_local]
+${codexProvider({ port, bearerToken, tokenCommandPath })}`;
 
-  for (const line of String(current || "").replaceAll("\r\n", "\n").split("\n")) {
-    const table = line.match(/^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/);
-    if (table) {
-      beforeFirstTable = false;
-      const name = table[1].trim();
-      skippingManagedProvider = name === "model_providers.antigravity_local"
-        || name.startsWith("model_providers.antigravity_local.");
-      inWindowsTable = name === "windows";
-      if (inWindowsTable) hasWindowsTable = true;
-      if (!skippingManagedProvider) {
-        preserved.push(line);
-        if (inWindowsTable) preserved.push('sandbox = "unelevated"');
-      }
-      continue;
-    }
-    if (skippingManagedProvider) continue;
-    if (inWindowsTable && /^\s*sandbox\s*=/.test(line)) continue;
-    if (beforeFirstTable && /^\s*(?:model_provider|model|model_catalog_json|openai_base_url)\s*=/.test(line)) continue;
-    preserved.push(line);
+  let text = String(originalToml || "").replace(/\r\n/g, "\n");
+  if (/^\s*model_provider\s*=/m.test(text)) {
+    text = text.replace(/^\s*model_provider\s*=.*$/m, 'model_provider = "antigravity_local"');
+  } else {
+    text = `model_provider = "antigravity_local"\n${text}`;
   }
 
-  const existing = preserved.join("\n").trim();
-  const active = `model_provider = "antigravity_local"
-model = ${tomlString(model)}
-model_catalog_json = ${tomlString(toPortablePath(catalogPath))}`;
-  const provider = codexProvider({ port, bearerToken, tokenCommandPath });
-  const windows = hasWindowsTable ? "" : `[windows]
-sandbox = "unelevated"`;
+  if (/^\s*model\s*=/m.test(text)) {
+    text = text.replace(/^\s*model\s*=.*$/m, `model = ${tomlString(model)}`);
+  } else {
+    text = `model = ${tomlString(model)}\n${text}`;
+  }
 
-  return `${[active, existing, provider, windows].filter(Boolean).join("\n\n")}\n`;
+  if (/^\s*model_catalog_json\s*=/m.test(text)) {
+    text = text.replace(/^\s*model_catalog_json\s*=.*$/m, `model_catalog_json = ${tomlString(toPortablePath(catalogPath))}`);
+  } else {
+    text = `model_catalog_json = ${tomlString(toPortablePath(catalogPath))}\n${text}`;
+  }
+
+  text = text.replace(/\[model_providers\.antigravity_local\][\s\S]*?(?=\n\[|$)/g, "").trimEnd();
+  text = `${text}\n\n${providerBlock}\n`;
+
+  if (/\[windows\][\s\S]*?sandbox\s*=/m.test(text)) {
+    text = text.replace(/(\[windows\][\s\S]*?sandbox\s*=\s*)"[^"]*"/m, '$1"unelevated"');
+  } else {
+    text = `${text}\n[windows]\nsandbox = "unelevated"\n`;
+  }
+
+  return `${text.trim()}\n`;
 }
 
-export function chooseDefaultModel(models, requested = "") {
-  if (requested && models.some((model) => model.id === requested)) return requested;
-  const preferences = [
-    /gemini-3\.7-flash-high/i,
-    /gemini-3\.6-flash-high/i,
-    /gemini-3\.1-pro/i,
-    /gemini-3-pro/i,
-    /gemini-3\.1-flash/i,
-    /gemini-3-flash/i,
-    /claude-sonnet/i,
-    /gemini-2\.5-pro/i,
-    /gemini-2\.5-flash/i,
+export function chooseDefaultModel(models) {
+  const preferred = [
+    "gemini-3.7-flash-high",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash-high",
+    "gemini-3.6-flash",
+    "gemini-3-flash",
+    "gemini-3.1-pro-low",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6-thinking",
   ];
-  for (const pattern of preferences) {
-    const match = models.find((model) => pattern.test(model.id) && !/image|computer-use/i.test(model.id));
-    if (match) return match.id;
+  for (const candidate of preferred) {
+    const matched = models.find((model) => model.id.toLowerCase() === candidate);
+    if (matched) return matched.id;
   }
-  return models.find((model) => !/image|computer-use/i.test(model.id))?.id || models[0]?.id || "";
+  return models[0]?.id || "gemini-3.7-flash-high";
 }
 
 export function isAntigravityAccount(account) {
-  const hints = [account?.provider, account?.type, account?.account_type, account?.name]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return hints.includes("antigravity");
+  return /@(?:gmail\.com|googlemail\.com)$/i.test(account?.email || account?.name || "")
+    || Boolean(account?.tokens?.refresh_token)
+    || Boolean(account?.tokens?.id_token)
+    || Boolean(account?.oauth);
 }

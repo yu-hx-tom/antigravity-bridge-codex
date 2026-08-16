@@ -92,18 +92,16 @@ async function main() {
   const models = sourceModels(source);
   const tempHome = await mkdtemp(path.join(os.tmpdir(), "antigravity-catalog-verify-"));
   const catalogPath = path.join(tempHome, "models.json");
-  const tokenCommandPath = path.join(tempHome, "get-token.ps1");
   let child;
   let stderr = "";
 
   try {
     await writeFile(catalogPath, `${JSON.stringify(createModelCatalog(models), null, 2)}\n`, "utf8");
-    await writeFile(tokenCommandPath, "[Console]::Out.Write('catalog-verifier-not-used')\n", "utf8");
     await writeFile(path.join(tempHome, "config.toml"), createCodexProfile({
       port: 8317,
       model: models[0].id,
       catalogPath,
-      tokenCommandPath,
+      bearerToken: "catalog-verifier-not-used",
     }), "utf8");
     await writeFile(path.join(tempHome, "auth.json"), createCodexApiAuth("catalog-verifier-not-used"), "utf8");
 

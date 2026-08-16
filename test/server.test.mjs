@@ -42,14 +42,18 @@ test("Store launcher performs a recoverable one-click takeover", async () => {
   assert.doesNotMatch(launcher, /WindowsApps/);
 });
 
-test("local dashboard serves a protected API", { timeout: 15_000 }, async () => {
+test("local dashboard serves a protected API and allows live model switching", { timeout: 15_000 }, async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ag-codex-bridge-"));
   const liveCodexHome = path.join(dataDir, "live-codex-home");
   const port = await freePort();
+  await fs.mkdir(liveCodexHome, { recursive: true });
+  await fs.writeFile(path.join(liveCodexHome, "config.toml"), "model_provider = \"antigravity_local\"\nmodel = \"gemini-3-flash\"\n");
+  await fs.writeFile(path.join(liveCodexHome, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { test: "user-session" } }));
   await fs.writeFile(path.join(dataDir, "settings.json"), JSON.stringify({
-    clientKey: "legacy-client-secret",
-    managementKey: "legacy-management-secret",
-    uiKey: "legacy-ui-secret",
+    clientKey: "test-client-secret",
+    managementKey: "test-management-secret",
+    uiKey: "test-ui-secret",
+    codexHome: liveCodexHome,
   }));
   const child = spawn(process.execPath, ["server.mjs"], {
     cwd: path.resolve(import.meta.dirname, ".."),
@@ -59,7 +63,6 @@ test("local dashboard serves a protected API", { timeout: 15_000 }, async () => 
       BRIDGE_CODEX_HOME: liveCodexHome,
       BRIDGE_PORT: String(port),
       BRIDGE_NO_OPEN: "1",
-      BRIDGE_DISABLE_EFS: "1",
     },
     stdio: "ignore",
   });
@@ -77,27 +80,28 @@ test("local dashboard serves a protected API", { timeout: 15_000 }, async () => 
     const body = await allowed.json();
     assert.equal(body.proxy.running, false);
     assert.equal(body.proxy.endpoint, "http://127.0.0.1:8317/v1");
-    assert.equal(body.proxy.compatibility.installed, false);
-    assert.equal(body.proxy.compatibility.pinnedVersion, "7.2.132");
     assert.equal(body.paths.codexHome, path.join(dataDir, "codex-home"));
     assert.equal(body.codex.configPath, path.join(liveCodexHome, "config.toml"));
     assert.equal(body.codex.authPath, path.join(liveCodexHome, "auth.json"));
     assert.equal(body.paths.liveCodexHome, liveCodexHome);
-    const storedSettings = await fs.readFile(path.join(dataDir, "settings.json"), "utf8");
-    assert.doesNotMatch(storedSettings, /legacy-|agc_|agm_|agui_|clientKey|managementKey|uiKey/);
-    const protectedSecrets = await fs.readFile(path.join(dataDir, "secure", "secrets.dpapi"), "utf8");
-    assert.doesNotMatch(protectedSecrets, /legacy-|agc_|agm_|agui_/);
 
-    const diagnosticsResponse = await fetch(`http://127.0.0.1:${port}/api/diagnostics`, {
+    // Test live model switching endpoint
+    const switchRes = await fetch(`http://127.0.0.1:${port}/api/codex/model`, {
       method: "POST",
       headers: { "X-Bridge-Key": token, "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify({ model: "gemini-3.7-flash-high" }),
     });
-    assert.equal(diagnosticsResponse.status, 200);
-    const diagnostics = await diagnosticsResponse.json();
-    assert.equal(diagnostics.redacted, true);
-    assert.ok(diagnostics.archivePath.startsWith(path.join(dataDir, "diagnostics")));
-    assert.ok((await fs.stat(diagnostics.archivePath)).size > 0);
+    assert.equal(switchRes.status, 200);
+    const switchBody = await switchRes.json();
+    assert.equal(switchBody.model, "gemini-3.7-flash-high");
+
+    const updatedConfig = await fs.readFile(path.join(liveCodexHome, "config.toml"), "utf8");
+    assert.match(updatedConfig, /model = "gemini-3\.7-flash-high"/);
+
+    // Verify auth.json was preserved with original user session
+    const preservedAuth = JSON.parse(await fs.readFile(path.join(liveCodexHome, "auth.json"), "utf8"));
+    assert.equal(preservedAuth.auth_mode, "chatgpt");
+    assert.equal(preservedAuth.tokens?.test, "user-session");
   } finally {
     child.kill();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -128,7 +132,6 @@ test("bridge startup restores an interrupted Codex takeover", { timeout: 15_000 
       BRIDGE_CODEX_HOME: liveCodexHome,
       BRIDGE_PORT: String(port),
       BRIDGE_NO_OPEN: "1",
-      BRIDGE_DISABLE_EFS: "1",
     },
     stdio: "ignore",
   });

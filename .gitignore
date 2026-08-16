@@ -1,4 +1,14 @@
 .data/
 node_modules/
+dist/
+project/
 *.log
+*.tmp
+scratch_models.json
 bridge-startup.log
+secure/
+auths/
+diagnostics/
+backups/
+*.dpapi
+*.key

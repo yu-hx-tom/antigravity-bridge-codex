@@ -10,15 +10,9 @@ if (-not (Test-Path -LiteralPath $settingsPath)) {
   throw 'Bridge settings were not found. Start Antigravity Codex Bridge first.'
 }
 $settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-$secretsPath = Join-Path $dataDir 'secure\secrets.dpapi'
-Add-Type -AssemblyName System.Security
-$encoded = (Get-Content -Raw -LiteralPath $secretsPath).Trim()
-$encrypted = [Convert]::FromBase64String($encoded)
-$bytes = [Security.Cryptography.ProtectedData]::Unprotect($encrypted, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
-$secrets = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
 $bridgePort = if ($env:BRIDGE_PORT) { $env:BRIDGE_PORT } else { '8787' }
 $bridgeUrl = 'http://127.0.0.1:' + $bridgePort
-$headers = @{ 'X-Bridge-Key' = $secrets.uiKey }
+$headers = @{ 'X-Bridge-Key' = $settings.uiKey }
 $body = @{ model = $settings.defaultModel } | ConvertTo-Json
 
 $codexProcesses = Get-Process -Name ChatGPT -ErrorAction SilentlyContinue

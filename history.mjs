@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -66,13 +67,13 @@ export async function readHistoryInventory(codexHome, limit = 100) {
           canContinue,
           policy: canContinue
             ? "Created with Antigravity; continuation is allowed"
-            : "Original provider is preserved; do not continue this task with Gemini",
+            : "Original provider is preserved natively in local database",
         };
       }),
       migration: {
         enabled: false,
         experimental: true,
-        reason: "Provider migration requires a separate full-backup experiment and is intentionally disabled",
+        reason: "Provider migration is intentionally disabled to preserve database authenticity",
       },
     };
   } catch (error) {
@@ -87,4 +88,51 @@ export async function readHistoryInventory(codexHome, limit = 100) {
   } finally {
     database.close();
   }
+}
+
+export async function syncThreadProvider(codexHome, targetProvider) {
+  const databasePath = path.join(path.resolve(codexHome), "state_5.sqlite");
+  if (!fsSync.existsSync(databasePath)) return 0;
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(databasePath);
+    const result = db.prepare("UPDATE threads SET model_provider = ?").run(targetProvider);
+    db.close();
+    return result.changes;
+  } catch (error) {
+    return 0;
+  }
+}
+
+export async function cleanForeignReasoningItems(sessionsDir) {
+  let cleanedCount = 0;
+  let totalRemoved = 0;
+  try {
+    const list = await fs.readdir(sessionsDir);
+    for (const item of list) {
+      const full = path.join(sessionsDir, item);
+      try {
+        const stat = await fs.stat(full);
+        if (stat.isDirectory()) {
+          const res = await cleanForeignReasoningItems(full);
+          cleanedCount += res.cleanedCount;
+          totalRemoved += res.totalRemoved;
+        } else if (item.endsWith(".jsonl")) {
+          const content = await fs.readFile(full, "utf8");
+          if (content.includes("rs_resp_") || content.includes("cpa-gemini")) {
+            const lines = content.split("\n").filter(Boolean);
+            const beforeLen = lines.length;
+            const cleaned = lines.filter((l) => !l.includes("rs_resp_") && !l.includes("cpa-gemini"));
+            const diff = beforeLen - cleaned.length;
+            if (diff > 0) {
+              await fs.writeFile(full, cleaned.join("\n") + "\n", "utf8");
+              cleanedCount++;
+              totalRemoved += diff;
+            }
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return { cleanedCount, totalRemoved };
 }

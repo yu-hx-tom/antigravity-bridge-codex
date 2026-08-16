@@ -25,11 +25,11 @@
       <div class="hero-copy">
         <p class="kicker">ANTIGRAVITY / CODEX / LOOPBACK ONLY</p>
         <h1>把可用模型，<br><em>接到本地 Codex。</em></h1>
-        <p class="lede">管理 Google OAuth 账号、查看上游报告额度，并安全备份后临时切换 Codex 到 API Service。</p>
+        <p class="lede">管理 Google OAuth 账号、查看上游报告额度，保留官方历史记录并一键无缝接入 Antigravity 模型。</p>
         <div class="safety-row">
           <span>127.0.0.1 ONLY</span>
-          <span>CONFIG + AUTH 自动备份</span>
-          <span>会话粘滞 + 自动故障转移</span>
+          <span>保留官方登录与历史</span>
+          <span>会话粘滞 + 429 智能重试</span>
         </div>
       </div>
 
@@ -37,7 +37,7 @@
         <div class="launch-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
         <p class="launch-label">ONE SWITCH START</p>
         <button class="launch-button" id="launchCodex" type="button">
-          <span>应用 API Service 配置</span>
+          <span>一键启动 Codex</span>
           <small>SAFE SINGLE-INSTANCE SWITCH</small>
         </button>
         <div class="launch-meta">
@@ -88,7 +88,7 @@
           </div>
           <div class="notice compact">
             <b>这是非官方接入路径</b>
-            <span>请求会到 Antigravity 使用的 Google 内部接口，并非公开 Gemini API。建议只用专门的测试账号。</span>
+            <span>请求会到 Antigravity 使用的 Google 内部接口，并非公开 Gemini API。建议使用专门的测试账号。</span>
           </div>
         </article>
       </div>
@@ -113,21 +113,21 @@
 
     <section class="workspace reveal delay-4">
       <div class="section-heading">
-        <div><span class="section-no">03</span><p class="eyebrow">MODEL CATALOG</p><h2>Codex 模型</h2></div>
-        <p>先在桥接器目录生成配置，再备份并替换默认 Codex 的 config.toml 与 auth.json；需要时可一键原样恢复。</p>
+        <div><span class="section-no">03</span><p class="eyebrow">MODEL CATALOG</p><h2>Codex 模型切换</h2></div>
+        <p>选择模型即可实时切换 Codex 当前生效模型，保留官方登录凭据与全部历史聊天会话。</p>
       </div>
       <div class="model-layout">
         <article class="panel model-picker">
-          <label for="modelSelect">默认启动模型</label>
+          <label for="modelSelect">当前生效模型</label>
           <select id="modelSelect"><option value="">等待服务启动</option></select>
           <div class="button-row">
-            <button class="button primary" id="prepareProfile" type="button">仅生成 Profile</button>
+            <button class="button primary" id="switchModel" type="button">立即切换模型</button>
             <button class="button ghost" id="restoreCodex" type="button" disabled>恢复原配置</button>
           </div>
           <p class="micro" id="profilePath">API Service 配置尚未应用</p>
         </article>
         <article class="panel model-cloud">
-          <div class="panel-top simple"><p class="panel-label">AVAILABLE THROUGH PROXY</p><strong id="modelCount">0</strong></div>
+          <div class="panel-top simple"><p class="panel-label">AVAILABLE THROUGH PROXY (点击可快速切换)</p><strong id="modelCount">0</strong></div>
           <div class="chips" id="modelChips"><span>尚无模型</span></div>
         </article>
       </div>
@@ -135,12 +135,8 @@
 
     <section class="workspace reveal">
       <div class="section-heading">
-        <div><span class="section-no">04</span><p class="eyebrow">READ-ONLY HISTORY</p><h2>历史任务</h2></div>
-        <p>只读取本地任务元数据，不复制、不迁移、不修改原 Provider。非 Antigravity 创建的旧任务默认只读，避免让 Gemini 续写官方模型上下文。</p>
-      </div>
-      <div class="notice">
-        <b>历史迁移默认关闭</b>
-        <span>旧任务继续保留在原 Codex Home；实验迁移必须先完整备份 SQLite、sessions 与索引文件，并支持一键回退。</span>
+        <div><span class="section-no">04</span><p class="eyebrow">LOCAL HISTORY</p><h2>本地历史会话</h2></div>
+        <p>完整读取本地 state_5.sqlite 历史会话。官方原登录状态与全部历史记录完整保留在 Codex 中。</p>
       </div>
       <p class="history-summary" id="historySummary">正在读取本地历史索引</p>
       <div class="history-list" id="historyList"></div>
@@ -169,7 +165,7 @@
     </section>
   </main>
 
-  <footer><span>ANTIGRAVITY CODEX BRIDGE</span><span>LOCAL-FIRST / SAFE SINGLE-INSTANCE TAKEOVER</span></footer>
+  <footer><span>ANTIGRAVITY CODEX BRIDGE</span><span>LOCAL-FIRST / PRESERVE LOGIN & HISTORY</span></footer>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/app.js" type="module"></script>
 </body>

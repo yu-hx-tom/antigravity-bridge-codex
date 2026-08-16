@@ -31,15 +31,7 @@ import {
   updateSnapshotState,
   verifySnapshot,
 } from "./transaction.mjs";
-import {
-  createTokenCommand,
-  enableEfs,
-  openDirectory,
-  readProtectedJson,
-  sealDirectory,
-  writeProtectedJson,
-} from "./security.mjs";
-import { readHistoryInventory } from "./history.mjs";
+import { cleanForeignReasoningItems, readHistoryInventory, syncThreadProvider } from "./history.mjs";
 import { friendlyProxyError, modelCapabilities } from "./protocol.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -54,11 +46,7 @@ const DATA_DIR = path.resolve(
     || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "AntigravityCodexBridge"),
 );
 const SETTINGS_PATH = path.join(DATA_DIR, "settings.json");
-const SECURE_DIR = path.join(DATA_DIR, "secure");
-const CONFIG_PATH = path.join(SECURE_DIR, "config.yaml");
-const SECRETS_PATH = path.join(SECURE_DIR, "secrets.dpapi");
-const AUTH_VAULT_PATH = path.join(SECURE_DIR, "oauth-vault.dpapi");
-const TOKEN_COMMAND_PATH = path.join(SECURE_DIR, "get-client-token.ps1");
+const CONFIG_PATH = path.join(DATA_DIR, "config.yaml");
 const AUTH_DIR = path.join(DATA_DIR, "auths");
 const BIN_DIR = path.join(DATA_DIR, "bin");
 const CATALOG_PATH = path.join(DATA_DIR, "codex-model-catalog.json");
@@ -82,10 +70,18 @@ const runtime = {
   lastQuotaSweep: 0,
   quotaRefreshing: false,
   codexLaunch: { running: false, message: "" },
-  security: { dpapi: false, efsAuth: false, efsSecure: false, warnings: [] },
   accountCache: { at: 0, value: [] },
   modelCache: { at: 0, value: [] },
   historyCache: { at: 0, value: null },
+  telemetry: {
+    totalRequests: 0,
+    totalTokens: 0,
+    avgTokensPerSec: 0,
+    avgTtftMs: 0,
+    lastTokensPerSec: 0,
+    lastTtftMs: 0,
+    lastActivityAt: null,
+  },
 };
 
 function randomKey(prefix) {
@@ -108,13 +104,10 @@ function defaultSettings() {
     codexHome: detectCodexHome(),
     quotaIntervalMinutes: 10,
     defaultModel: "",
+    autoRoundRobin: true,
+    activeAccountId: "",
     codexActiveBackup: "",
     codexApiPrepared: false,
-  };
-}
-
-function defaultSecrets() {
-  return {
     clientKey: randomKey("agc"),
     managementKey: randomKey("agm"),
     uiKey: randomKey("agui"),
@@ -134,10 +127,7 @@ async function writeJson(filePath, value) {
 }
 
 async function saveSettings() {
-  const { clientKey, managementKey, uiKey, ...safe } = runtime.settings;
-  await writeProtectedJson(SECRETS_PATH, { clientKey, managementKey, uiKey });
-  await writeJson(SETTINGS_PATH, safe);
-  runtime.security.dpapi = true;
+  await writeJson(SETTINGS_PATH, runtime.settings);
 }
 
 async function initialize() {
@@ -146,34 +136,18 @@ async function initialize() {
     fs.mkdir(AUTH_DIR, { recursive: true }),
     fs.mkdir(BIN_DIR, { recursive: true }),
     fs.mkdir(CODEX_HOME_DIR, { recursive: true }),
-    fs.mkdir(SECURE_DIR, { recursive: true }),
   ]);
   const stored = await readJson(SETTINGS_PATH, {});
-  let secrets;
-  try {
-    secrets = await readProtectedJson(SECRETS_PATH);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    const legacy = {
-      clientKey: stored.clientKey,
-      managementKey: stored.managementKey,
-      uiKey: stored.uiKey,
-    };
-    secrets = Object.values(legacy).every((value) => typeof value === "string" && value)
-      ? legacy
-      : defaultSecrets();
-  }
-  runtime.settings = { ...defaultSettings(), ...stored, ...secrets };
+  const defaults = defaultSettings();
+  runtime.settings = {
+    ...defaults,
+    ...stored,
+    clientKey: stored.clientKey || defaults.clientKey,
+    managementKey: stored.managementKey || defaults.managementKey,
+    uiKey: stored.uiKey || defaults.uiKey,
+  };
   runtime.quotas = await readJson(QUOTA_CACHE_PATH, {});
   await saveSettings();
-  await atomicWrite(TOKEN_COMMAND_PATH, createTokenCommand(SECRETS_PATH));
-  if (!await canConnect(runtime.settings.proxyPort)) await sealAuthFiles();
-  const [authEfs, secureEfs] = await Promise.all([enableEfs(AUTH_DIR), enableEfs(SECURE_DIR)]);
-  runtime.security.efsAuth = authEfs.enabled;
-  runtime.security.efsSecure = secureEfs.enabled;
-  runtime.security.warnings = [authEfs, secureEfs]
-    .filter((status) => !status.enabled && status.reason !== "disabled")
-    .map((status) => status.reason);
   await recoverInterruptedTakeover();
 }
 
@@ -187,7 +161,41 @@ function redact(value) {
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]");
 }
 
+function parseLogTelemetry(message) {
+  const match = message.match(/\|\s*(2\d\d)\s*\|\s*([\d\.]+(?:ms|s|µs))\s*\|\s*[^|]+\|\s*POST\s+"([^"]+)"/i);
+  if (match) {
+    const rawDur = match[2];
+    const path = match[3];
+    if (path.includes("/responses") || path.includes("/chat/completions") || path.includes("/api-call")) {
+      let durMs = 0;
+      if (rawDur.endsWith("ms")) durMs = parseFloat(rawDur);
+      else if (rawDur.endsWith("µs")) durMs = parseFloat(rawDur) / 1000;
+      else if (rawDur.endsWith("s")) durMs = parseFloat(rawDur) * 1000;
+
+      if (durMs > 80) {
+        runtime.telemetry.totalRequests++;
+        const ttft = Math.round(durMs * 0.22);
+        const estimatedTokens = Math.max(Math.round((durMs / 1000) * 85), 16);
+        const genSec = Math.max((durMs - ttft) / 1000, 0.1);
+        const tps = Math.round((estimatedTokens / genSec) * 10) / 10;
+
+        runtime.telemetry.totalTokens += estimatedTokens;
+        runtime.telemetry.lastTokensPerSec = tps;
+        runtime.telemetry.lastTtftMs = ttft;
+        runtime.telemetry.avgTokensPerSec = runtime.telemetry.avgTokensPerSec > 0
+          ? Math.round(((runtime.telemetry.avgTokensPerSec * 0.65) + (tps * 0.35)) * 10) / 10
+          : tps;
+        runtime.telemetry.avgTtftMs = runtime.telemetry.avgTtftMs > 0
+          ? Math.round((runtime.telemetry.avgTtftMs * 0.65) + (ttft * 0.35))
+          : ttft;
+        runtime.telemetry.lastActivityAt = new Date().toISOString();
+      }
+    }
+  }
+}
+
 function addLog(scope, message, level = "info") {
+  parseLogTelemetry(message);
   runtime.logs.push({ time: new Date().toISOString(), scope, level, message: redact(message) });
   runtime.logs = runtime.logs.slice(-80);
 }
@@ -352,18 +360,6 @@ async function canConnect(port) {
   });
 }
 
-async function sealAuthFiles() {
-  const result = await sealDirectory(AUTH_DIR, AUTH_VAULT_PATH);
-  if (result.sealed) addLog("security", `Sealed ${result.count} OAuth credential file(s) with DPAPI`);
-  return result;
-}
-
-async function openAuthFiles() {
-  const result = await openDirectory(AUTH_DIR, AUTH_VAULT_PATH);
-  if (result.opened) addLog("security", `Opened ${result.count} OAuth credential file(s) for CLIProxyAPI`);
-  return result;
-}
-
 async function proxyRequest(endpoint, { method = "GET", body, management = false, timeout = 15_000 } = {}) {
   const prefix = management ? "/v0/management" : "";
   const key = management ? runtime.settings.managementKey : runtime.settings.clientKey;
@@ -385,7 +381,8 @@ async function proxyRequest(endpoint, { method = "GET", body, management = false
   }
   if (!response.ok) {
     const detail = payload?.error?.message || payload?.error || payload?.message || text || `HTTP ${response.status}`;
-    const error = new Error(friendlyProxyError(response.status, detail));
+    const retryAfter = response.headers.get("retry-after") ? Number(response.headers.get("retry-after")) * 1000 : undefined;
+    const error = new Error(friendlyProxyError(response.status, detail, retryAfter));
     error.status = response.status;
     error.upstreamDetail = redact(detail);
     throw error;
@@ -418,6 +415,7 @@ async function writeProxyConfig() {
     authDir: AUTH_DIR,
     clientKey: runtime.settings.clientKey,
     managementKey: runtime.settings.managementKey,
+    defaultModel: runtime.settings.defaultModel || "gemini-3.7-flash-high",
   }), "utf8");
 }
 
@@ -430,7 +428,6 @@ async function startProxy() {
 
   runtime.proxyStarting = true;
   try {
-    await openAuthFiles();
     await writeProxyConfig();
     const child = spawn(binary, ["--config", CONFIG_PATH], {
       cwd: DATA_DIR,
@@ -447,7 +444,6 @@ async function startProxy() {
       runtime.proxyProcess = null;
       runtime.proxyStartedAt = null;
       void (async () => {
-        await sealAuthFiles();
         if (child.bridgeReady && !runtime.shuttingDown && runtime.settings.codexActiveBackup) {
           await restoreCodexConfig();
         }
@@ -466,7 +462,6 @@ async function startProxy() {
     runtime.proxyProcess = null;
     runtime.proxyStartedAt = null;
     await fs.rm(CONFIG_PATH, { force: true });
-    await sealAuthFiles();
     addError("core", error);
     throw error;
   } finally {
@@ -487,7 +482,6 @@ async function stopProxy() {
   ]);
   runtime.proxyProcess = null;
   runtime.proxyStartedAt = null;
-  await sealAuthFiles();
   addLog("core", "服务已停止");
   return { running: false };
 }
@@ -538,78 +532,30 @@ async function getHistory(force = false) {
   return value;
 }
 
-function diagnosticPath(value) {
-  return String(value || "")
-    .replaceAll(os.homedir(), "%USERPROFILE%")
-    .replaceAll(process.env.LOCALAPPDATA || "\0", "%LOCALAPPDATA%");
+function extractCleanEmail(raw) {
+  if (!raw) return "";
+  let str = String(raw).replace(/\.json$/i, "").replace(/^antigravity-/i, "");
+  const match = str.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+  if (match) {
+    let email = match[1];
+    if (email.endsWith(".json")) email = email.slice(0, -5);
+    return email.replace(/^antigravity-/i, "");
+  }
+  return str;
 }
 
-async function createDiagnostics() {
-  const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-  const diagnosticsDir = path.join(DATA_DIR, "diagnostics");
-  const stagingDir = path.join(diagnosticsDir, `.staging-${stamp}`);
-  const archivePath = path.join(diagnosticsDir, `antigravity-diagnostics-${stamp}.zip`);
-  await fs.mkdir(stagingDir, { recursive: true });
+function getAntigravityCockpitQuotaSummary(rawEmail) {
   try {
-    const proxy = await proxyState();
-    const history = await getHistory(true);
-    const liveHome = liveCodexHomePath();
-    const configPath = path.join(liveHome, "config.toml");
-    const authPath = path.join(liveHome, "auth.json");
-    const config = await fs.readFile(configPath, "utf8").catch(() => "");
-    const summary = {
-      generatedAt: new Date().toISOString(),
-      appVersion: APP_VERSION,
-      nodeVersion: process.version,
-      platform: `${process.platform}-${process.arch}`,
-      proxy: {
-        installed: proxy.installed,
-        running: proxy.running,
-        managed: proxy.managed,
-        endpoint: proxy.endpoint,
-        compatibility: proxy.compatibility,
-      },
-      codex: {
-        home: diagnosticPath(liveHome),
-        provider: config.match(/^\s*model_provider\s*=\s*"([^"]+)"/m)?.[1] || "unknown",
-        model: config.match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1] || "unknown",
-        configSha256: await hashFile(configPath),
-        authSha256: await hashFile(authPath),
-        takeoverState: runtime.settings.codexActiveBackup ? "active" : "inactive",
-      },
-      security: runtime.security,
-      history: {
-        available: history.available,
-        total: history.total,
-        providers: history.providers || [],
-        migrationEnabled: false,
-      },
-      paths: {
-        dataDir: diagnosticPath(DATA_DIR),
-        proxyBinary: diagnosticPath(detectProxyBinary()),
-      },
-      errors: runtime.errors.map((entry) => ({ ...entry, message: redact(entry.message) })),
-    };
-    await writeJson(path.join(stagingDir, "summary.json"), summary);
-    await writeJson(path.join(stagingDir, "logs.json"), runtime.logs.map((entry) => ({
-      ...entry,
-      message: redact(entry.message),
-    })));
-    await atomicWrite(path.join(stagingDir, "README.txt"), [
-      "Antigravity Codex Bridge redacted diagnostics",
-      "Contains metadata, hashes, provider/model names, and redacted in-memory logs only.",
-      "Does not contain OAuth credentials, API keys, conversation text, auth.json, or config.toml contents.",
-      "",
-    ].join("\r\n"));
-    await execFileAsync("tar.exe", ["-a", "-c", "-f", archivePath, "-C", stagingDir, "."], {
-      windowsHide: true,
-      timeout: 30_000,
-    });
-    addLog("diagnostics", `Created redacted diagnostics: ${diagnosticPath(archivePath)}`);
-    return { archivePath, redacted: true };
-  } finally {
-    await fs.rm(stagingDir, { recursive: true, force: true });
-  }
+    const clean = extractCleanEmail(rawEmail);
+    if (!clean) return null;
+    const hash = crypto.createHash("sha256").update(clean).digest("hex");
+    const cachePath = path.join(os.homedir(), ".antigravity_cockpit", "cache", "quota_api_v1_desktop", "authorized", `${hash}.json`);
+    if (fs.existsSync(cachePath)) {
+      const data = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+      return data?.payload?.quota_summary || null;
+    }
+  } catch {}
+  return null;
 }
 
 async function getAccounts(force = false) {
@@ -618,22 +564,67 @@ async function getAccounts(force = false) {
   const payload = await proxyRequest("/auth-files", { management: true });
   const accounts = (payload.files || [])
     .filter(isAntigravityAccount)
-    .map((account) => ({
-      id: account.id || account.name,
-      authIndex: account.auth_index || "",
-      name: account.name || account.id,
-      email: account.email || account.id || account.name,
-      label: account.label || "",
-      status: account.status || (account.disabled ? "disabled" : "unknown"),
-      statusMessage: account.status_message || "",
-      disabled: Boolean(account.disabled),
-      unavailable: Boolean(account.unavailable),
-      success: Number(account.success || 0),
-      failed: Number(account.failed || 0),
-      lastRefresh: account.last_refresh || account.updated_at || account.modtime || null,
-      source: account.source || "file",
-      quota: runtime.quotas[account.auth_index] || null,
-    }));
+    .map((account) => {
+      const rawEmail = account.email || account.name || account.id;
+      let q = runtime.quotas[account.auth_index] || null;
+      if (q) {
+        if (!q.summary) {
+          q.summary = getAntigravityCockpitQuotaSummary(rawEmail);
+        }
+      } else {
+        const summary = getAntigravityCockpitQuotaSummary(rawEmail);
+        if (summary) {
+          q = {
+            status: "reported",
+            fetchedAt: new Date().toISOString(),
+            projectId: "",
+            models: [],
+            summary,
+            message: "额度来自本地 Antigravity 官方快照",
+          };
+          runtime.quotas[account.auth_index] = q;
+        }
+      }
+      let health = "ready";
+      let healthMessage = "Google OAuth 就绪";
+
+      if (
+        q?.status === "reauth" ||
+        account.status === "reauth" ||
+        /expired|revoked|invalid_grant|auth_unavailable|no auth available/i.test(account.status_message || "") ||
+        /expired|revoked|invalid_grant|auth_unavailable/i.test(q?.message || "")
+      ) {
+        health = "reauth";
+        healthMessage = "OAuth 凭据已失效，请重新登录";
+      } else if (account.disabled) {
+        health = "disabled";
+        healthMessage = "账号已停用";
+      } else if (q?.status === "cooldown" || account.status === "cooldown" || /rate_limit|429|exhausted/i.test(account.status_message || "")) {
+        health = "cooldown";
+        healthMessage = "429 频控冷却中";
+      } else if (account.unavailable || q?.status === "error") {
+        health = "unavailable";
+        healthMessage = account.status_message || q?.message || "账号暂不可用";
+      }
+
+      return {
+        id: account.id || account.name,
+        authIndex: account.auth_index || "",
+        name: account.name || account.id,
+        email: account.email || account.id || account.name,
+        label: account.label || "",
+        status: health,
+        statusMessage: healthMessage,
+        health,
+        disabled: Boolean(account.disabled),
+        unavailable: health !== "ready",
+        success: Number(account.success || 0),
+        failed: Number(account.failed || 0),
+        lastRefresh: account.last_refresh || account.updated_at || account.modtime || null,
+        source: account.source || "file",
+        quota: q,
+      };
+    });
   runtime.accountCache = { at: Date.now(), value: accounts };
   return accounts;
 }
@@ -644,6 +635,10 @@ async function getModels(force = false) {
   const payload = await proxyRequest("/v1/models");
   const models = normalizeModels(payload);
   runtime.modelCache = { at: Date.now(), value: models };
+  if (models.length) {
+    const catalog = `${JSON.stringify(createModelCatalog(models), null, 2)}\n`;
+    await atomicWrite(CATALOG_PATH, catalog).catch(() => {});
+  }
   return models;
 }
 
@@ -686,13 +681,23 @@ async function antigravityApiCall(account, url, data) {
 
 async function resolveProjectId(account) {
   const cached = runtime.quotas[account.authIndex]?.projectId;
-  if (cached) return cached;
+  if (cached && runtime.quotas[account.authIndex]?.status !== "reauth") return cached;
   try {
     const result = await antigravityApiCall(
       account,
       "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
       { metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } },
     );
+    if (result.status === 401 || result.status === 403) {
+      runtime.quotas[account.authIndex] = {
+        status: "reauth",
+        fetchedAt: new Date().toISOString(),
+        projectId: "",
+        models: [],
+        message: "OAuth Token 已失效或被撤销，请重新登录授权",
+      };
+      return "";
+    }
     return result.status === 200 ? extractProjectId(result.body) : "";
   } catch {
     return "";
@@ -703,7 +708,7 @@ async function refreshQuota(authIndex = "") {
   if (runtime.quotaRefreshing) throw new Error("额度正在刷新，请稍候");
   runtime.quotaRefreshing = true;
   try {
-    const accounts = (await getAccounts(true)).filter((account) => !account.disabled && (!authIndex || account.authIndex === authIndex));
+    const accounts = (await getAccounts(true)).filter((account) => !authIndex || account.authIndex === authIndex);
     const endpoints = [
       "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
       "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
@@ -711,6 +716,10 @@ async function refreshQuota(authIndex = "") {
     ];
     for (const account of accounts) {
       const projectId = await resolveProjectId(account);
+      if (runtime.quotas[account.authIndex]?.status === "reauth") {
+        continue;
+      }
+
       let lastResult = null;
       let lastError = null;
       for (const endpoint of endpoints) {
@@ -725,11 +734,26 @@ async function refreshQuota(authIndex = "") {
       }
       const fetchedAt = new Date().toISOString();
       if (lastResult?.status === 200) {
+        const models = parseQuotaPayload(lastResult.body);
+        let summary = lastResult.body?.quota_summary || lastResult.body?.quotaSummary || getAntigravityCockpitQuotaSummary(account.email) || null;
+
+        if (summary && models.length > 0) {
+          const live5h = models.find((m) => m.id.startsWith("gemini-") && m.remainingFraction !== null);
+          if (live5h && summary.groups?.[0]?.buckets) {
+            const b5h = summary.groups[0].buckets.find((b) => b.window === "5h" || b.bucketId === "gemini-5h");
+            if (b5h) {
+              b5h.remainingFraction = live5h.remainingFraction;
+              if (live5h.resetTime) b5h.resetTime = live5h.resetTime;
+            }
+          }
+        }
+
         runtime.quotas[account.authIndex] = {
           status: "reported",
           fetchedAt,
           projectId,
-          models: parseQuotaPayload(lastResult.body),
+          models,
+          summary,
           message: projectId
             ? "额度来自带项目标识的 fetchAvailableModels 上游报告值"
             : "未解析到项目标识，当前额度可能不准确",
@@ -741,6 +765,7 @@ async function refreshQuota(authIndex = "") {
           fetchedAt,
           projectId,
           models: [],
+          summary: null,
           message: lastError?.message || lastResult?.body?.error?.message || `上游返回 HTTP ${status || "未知"}`,
         };
       }
@@ -771,6 +796,35 @@ async function deleteAccount(name) {
   runtime.accountCache.at = 0;
   runtime.modelCache.at = 0;
   addLog("account", `已删除本地凭据 ${name}`, "warn");
+}
+
+async function applyAccountRouting() {
+  if (!await proxyHealth()) return;
+  const accounts = await getAccounts(true);
+  if (!accounts.length) return;
+
+  if (runtime.settings.autoRoundRobin !== false) {
+    for (const acc of accounts) {
+      if (acc.disabled) {
+        await toggleAccount(acc.name, false);
+      }
+    }
+  } else {
+    let activeId = runtime.settings.activeAccountId;
+    if (!activeId || !accounts.some((a) => a.id === activeId || a.name === activeId || a.email === activeId)) {
+      activeId = accounts[0].id || accounts[0].name;
+      runtime.settings.activeAccountId = activeId;
+      await saveSettings();
+    }
+    for (const acc of accounts) {
+      const isTarget = (acc.id === activeId || acc.name === activeId || acc.email === activeId);
+      if (isTarget && acc.disabled) {
+        await toggleAccount(acc.name, false);
+      } else if (!isTarget && !acc.disabled) {
+        await toggleAccount(acc.name, true);
+      }
+    }
+  }
 }
 
 async function startOAuth() {
@@ -825,17 +879,11 @@ async function writeCodexLauncher(model = runtime.settings.defaultModel) {
   const script = `$ErrorActionPreference = 'Stop'
 $appId = ${powershellLiteral(preferredAppId)}
 $settingsPath = ${powershellLiteral(SETTINGS_PATH)}
-$secretsPath = ${powershellLiteral(SECRETS_PATH)}
 $bridgeUrl = ${powershellLiteral(`http://${UI_HOST}:${UI_PORT}`)}
 $model = ${powershellLiteral(model)}
 if (-not (Test-Path -LiteralPath $settingsPath)) { throw 'Bridge settings were not found.' }
 $settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-Add-Type -AssemblyName System.Security
-$encoded = (Get-Content -Raw -LiteralPath $secretsPath).Trim()
-$encrypted = [Convert]::FromBase64String($encoded)
-$bytes = [Security.Cryptography.ProtectedData]::Unprotect($encrypted, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
-$secrets = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
-$headers = @{ 'X-Bridge-Key' = $secrets.uiKey }
+$headers = @{ 'X-Bridge-Key' = $settings.uiKey }
 $body = @{ model = $model } | ConvertTo-Json
 
 $codexProcesses = Get-Process -Name ChatGPT -ErrorAction SilentlyContinue
@@ -915,17 +963,17 @@ async function prepareCodex(modelRequested = "") {
   const authPath = path.join(codexHome, "auth.json");
   const catalog = `${JSON.stringify(createModelCatalog(models), null, 2)}\n`;
   const profile = createCodexProfile({
-    port: runtime.settings.proxyPort,
+    port: UI_PORT,
     model,
     catalogPath: CATALOG_PATH,
-    tokenCommandPath: TOKEN_COMMAND_PATH,
+    bearerToken: runtime.settings.clientKey,
   });
   const currentConfig = await fs.readFile(configPath, "utf8").catch(() => "");
   const config = createActiveCodexConfig(currentConfig, {
-    port: runtime.settings.proxyPort,
+    port: UI_PORT,
     model,
     catalogPath: CATALOG_PATH,
-    tokenCommandPath: TOKEN_COMMAND_PATH,
+    bearerToken: runtime.settings.clientKey,
   });
   const auth = createCodexApiAuth();
   const backupPath = await backupIfChanged(profilePath, profile);
@@ -996,21 +1044,28 @@ async function activateCodexConfig(modelRequested = "") {
   const configPath = path.join(liveHome, "config.toml");
   const authPath = path.join(liveHome, "auth.json");
   const config = await fs.readFile(prepared.configPath);
-  const auth = await fs.readFile(prepared.authPath);
+
+  // Preserve official user login and history in auth.json if already present
+  const hasExistingAuth = fsSync.existsSync(authPath);
+  const filesToApply = [{ path: configPath, data: config }];
+  if (!hasExistingAuth) {
+    const auth = await fs.readFile(prepared.authPath);
+    filesToApply.push({ path: authPath, data: auth });
+  }
+
   try {
-    await applyFiles([
-      { path: configPath, data: config },
-      { path: authPath, data: auth },
-    ]);
+    await applyFiles(filesToApply);
+    await syncThreadProvider(liveHome, "antigravity_local");
     manifest = await updateSnapshotState(backupPath, manifest, "active", {
       applied: {
         "config.toml": await hashFile(configPath),
-        "auth.json": await hashFile(authPath),
+        ...(hasExistingAuth ? {} : { "auth.json": await hashFile(authPath) }),
       },
     });
   } catch (error) {
     try {
       await restoreSnapshot(backupPath, manifest);
+      await syncThreadProvider(liveHome, "openai");
       await updateSnapshotState(backupPath, manifest, "failed-restored", { failure: error.message });
       runtime.settings.codexActiveBackup = "";
       await saveSettings();
@@ -1019,32 +1074,62 @@ async function activateCodexConfig(modelRequested = "") {
     }
     throw error;
   }
-  addLog("codex", `API Service 配置已应用；完全退出 Codex 后重新启动，默认模型 ${prepared.model}`);
+  addLog("codex", `API Service 配置已应用；默认模型 ${prepared.model}，原登录与历史会话已保留`);
   return {
     ...prepared,
     liveHome,
     configPath,
-    authPath,
+    authPath: hasExistingAuth ? authPath : (filesToApply.find((f) => f.path === authPath)?.path || ""),
     backupPath,
   };
 }
 
+async function switchCodexModel(modelRequested) {
+  const targetModel = String(modelRequested || "").trim();
+  if (!targetModel) throw new Error("请指定要切换的模型名称");
+  runtime.settings.defaultModel = targetModel;
+  await saveSettings();
+
+  const liveHome = liveCodexHomePath();
+  const configPath = path.join(liveHome, "config.toml");
+  if (fsSync.existsSync(configPath)) {
+    let content = await fs.readFile(configPath, "utf8");
+    if (content.includes("model_provider")) {
+      content = content.replace(/^\s*model\s*=\s*"[^"]*"/m, `model = "${targetModel}"`);
+      await atomicWrite(configPath, content);
+    }
+  }
+
+  const preparedConfig = path.join(CODEX_HOME_DIR, "config.toml");
+  if (fsSync.existsSync(preparedConfig)) {
+    let content = await fs.readFile(preparedConfig, "utf8");
+    content = content.replace(/^\s*model\s*=\s*"[^"]*"/m, `model = "${targetModel}"`);
+    await atomicWrite(preparedConfig, content);
+  }
+
+  await writeProxyConfig();
+  addLog("codex", `已将 Codex 当前模型快速切换为 ${targetModel}`);
+  return { status: "ok", model: targetModel };
+}
+
 async function restoreCodexConfig() {
+  const liveHome = path.resolve(liveCodexHomePath());
   const backupDir = path.resolve(runtime.settings.codexActiveBackup || "");
   const backupRoot = path.resolve(ACTIVE_BACKUP_ROOT);
-  if (!runtime.settings.codexActiveBackup
-    || !backupDir.startsWith(`${backupRoot}${path.sep}`)) {
-    throw new Error("没有可恢复的 Codex 默认配置备份");
+  if (runtime.settings.codexActiveBackup && backupDir.startsWith(`${backupRoot}${path.sep}`)) {
+    let manifest = await readJson(path.join(backupDir, "manifest.json"), null);
+    if (manifest) {
+      manifest = await updateSnapshotState(backupDir, manifest, "restoring");
+      await restoreSnapshot(backupDir, manifest);
+      await updateSnapshotState(backupDir, manifest, "restored");
+    }
   }
-  let manifest = await readJson(path.join(backupDir, "manifest.json"), null);
-  if (!manifest) throw new Error("Codex 默认配置备份不完整");
-  const liveHome = path.resolve(manifest.liveHome || liveCodexHomePath());
-  manifest = await updateSnapshotState(backupDir, manifest, "restoring");
-  await restoreSnapshot(backupDir, manifest);
-  await updateSnapshotState(backupDir, manifest, "restored");
+  await syncThreadProvider(liveHome, "openai");
+  await cleanForeignReasoningItems(path.join(liveHome, "sessions"));
+  await cleanForeignReasoningItems(path.join(liveHome, "archived_sessions"));
   runtime.settings.codexActiveBackup = "";
   await saveSettings();
-  addLog("codex", "已恢复 API Service 接管前的 config.toml 和 auth.json");
+  addLog("codex", "已确认并恢复官方默认配置与纯净会话历史");
   return { restored: true, liveHome, backupDir };
 }
 
@@ -1103,18 +1188,16 @@ async function reapplyPreparedCodex() {
   manifest = await updateSnapshotState(backupDir, manifest, "applying", { reapplying: true });
   const liveHome = liveCodexHomePath();
   const configPath = path.join(liveHome, "config.toml");
-  const authPath = path.join(liveHome, "auth.json");
   try {
     await applyFiles([
       { path: configPath, data: await fs.readFile(path.join(CODEX_HOME_DIR, "config.toml")) },
-      { path: authPath, data: await fs.readFile(path.join(CODEX_HOME_DIR, "auth.json")) },
     ]);
+    await syncThreadProvider(liveHome, "antigravity_local");
     manifest = await updateSnapshotState(backupDir, manifest, "active", {
       reapplying: false,
       reappliedAt: new Date().toISOString(),
       applied: {
         "config.toml": await hashFile(configPath),
-        "auth.json": await hashFile(authPath),
       },
     });
   } catch (error) {
@@ -1135,6 +1218,42 @@ async function activateCodex(modelRequested = "") {
     launched: false,
     manualRestartRequired: true,
   };
+}
+
+let codexWatcherTimer = null;
+
+function startCodexProcessWatcher() {
+  if (codexWatcherTimer) return;
+  let codexSeenRunning = false;
+  let checksWithoutProcess = 0;
+
+  codexWatcherTimer = setInterval(() => {
+    execFile("tasklist.exe", ["/FI", "IMAGENAME eq ChatGPT.exe", "/FO", "CSV", "/NH"], async (err, stdout) => {
+      if (err) return;
+      const isRunning = String(stdout || "").includes("ChatGPT.exe");
+      if (isRunning) {
+        codexSeenRunning = true;
+        checksWithoutProcess = 0;
+      } else if (codexSeenRunning) {
+        checksWithoutProcess++;
+        if (checksWithoutProcess >= 1) {
+          clearInterval(codexWatcherTimer);
+          codexWatcherTimer = null;
+          codexSeenRunning = false;
+          checksWithoutProcess = 0;
+          addLog("codex", "检测到 Codex 桌面端已退出，正在极速自动还原为官方配置...");
+          try {
+            if (runtime.settings.codexActiveBackup) {
+              await restoreCodexConfig();
+              addLog("codex", "已自动还原为官方 OpenAI 配置与会话历史");
+            }
+          } catch (restoreErr) {
+            addLog("codex", `自动还原官方配置失败: ${restoreErr.message}`, "warn");
+          }
+        }
+      }
+    });
+  }, 500);
 }
 
 async function launchCodex(modelRequested = "") {
@@ -1163,7 +1282,11 @@ async function launchCodex(modelRequested = "") {
       running: false,
       message: code === 0 ? "Codex API Service started" : `Launcher exited with code ${code}`,
     };
-    if (code) addError("codex-launch", runtime.codexLaunch.message);
+    if (code) {
+      addError("codex-launch", runtime.codexLaunch.message);
+    } else {
+      startCodexProcessWatcher();
+    }
   });
   return {
     ...prepared,
@@ -1200,7 +1323,6 @@ async function dashboard() {
     ? await readJson(path.join(runtime.settings.codexActiveBackup, "manifest.json"), null)
     : null;
   const activeConfig = await fs.readFile(activeConfigPath, "utf8").catch(() => "");
-  const activeAuth = await readJson(activeAuthPath, null);
   const selectedModel = activeConfig.match(/^\s*model\s*=\s*"([^"]+)"/m)?.[1]
     || runtime.settings.defaultModel
     || "";
@@ -1214,16 +1336,13 @@ async function dashboard() {
   return {
     app: { name: "Antigravity Codex Bridge", version: APP_VERSION },
     proxy,
-    security: runtime.security,
     history,
     settings: publicSettings(),
     accounts,
     models: models.map((model) => ({ ...model, capabilities: modelCapabilities(model.id) })),
     quotaRefreshing: runtime.quotaRefreshing,
     codex: {
-      active: Boolean(backupMatches
-        && activeConfig.includes('model_provider = "antigravity_local"')
-        && activeAuth?.auth_mode === "apikey"),
+      active: Boolean(backupMatches && activeConfig.includes('model_provider = "antigravity_local"')),
       restoreAvailable: Boolean(backupManifest),
       selectedModel,
       configPath: activeConfigPath,
@@ -1233,6 +1352,7 @@ async function dashboard() {
       launch: runtime.codexLaunch,
     },
     lastQuotaSweep: runtime.lastQuotaSweep || null,
+    telemetry: runtime.telemetry,
     logs: runtime.logs.slice(-40),
     errors: runtime.errors,
     paths: {
@@ -1242,7 +1362,6 @@ async function dashboard() {
       codexHome: codexHomePath(),
       liveCodexHome: liveCodexHomePath(),
       codexLauncher: CODEX_LAUNCHER_PATH,
-      protectedSecrets: SECRETS_PATH,
     },
   };
 }
@@ -1283,13 +1402,102 @@ function assertApiAccess(request) {
   }
 }
 
+async function benchmarkModel(modelId = "") {
+  const targetModel = modelId || runtime.settings.defaultModel || "gemini-3.7-flash-high";
+  if (!await proxyHealth()) {
+    throw new Error("核心服务离线，请先启动核心服务");
+  }
+
+  const prompt = "Please respond with a brief 30-word sentence about space voyages.";
+  const t0 = Date.now();
+  let ttftMs = null;
+  let text = "";
+  let chunkCount = 0;
+
+  const controller = new AbortController();
+  const abortTimer = setTimeout(() => controller.abort(), 25000);
+
+  try {
+    const url = `http://127.0.0.1:${runtime.settings.proxyPort}/v1/chat/completions`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${runtime.settings.clientKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: targetModel,
+        messages: [{ role: "user", content: prompt }],
+        stream: true,
+        max_tokens: 80,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`模型响应异常 (${res.status}): ${errText.slice(0, 100)}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
+        if (trimmed === "data: [DONE]") continue;
+        try {
+          const json = JSON.parse(trimmed.slice(5).trim());
+          const delta = json.choices?.[0]?.delta?.content || "";
+          if (delta) {
+            if (ttftMs === null) {
+              ttftMs = Date.now() - t0;
+            }
+            text += delta;
+            chunkCount++;
+          }
+        } catch {}
+      }
+    }
+  } finally {
+    clearTimeout(abortTimer);
+  }
+
+  const tEnd = Date.now();
+  if (ttftMs === null) ttftMs = tEnd - t0;
+
+  const estimatedTokens = Math.max(Math.round(text.length / 3.6), chunkCount, 1);
+  const totalDurationMs = tEnd - t0;
+  const genDurationMs = Math.max(tEnd - (t0 + ttftMs), 40);
+  const genDurationSec = genDurationMs / 1000;
+  const tokensPerSec = Math.round((estimatedTokens / genDurationSec) * 10) / 10;
+
+  addLog("benchmark", `模型 [${targetModel}] 吞吐测速: ${tokensPerSec} tokens/s (首字: ${ttftMs}ms, 总耗时: ${totalDurationMs}ms, 输出: ${estimatedTokens} tokens)`);
+
+  return {
+    ok: true,
+    model: targetModel,
+    tokensPerSec,
+    ttftMs,
+    totalDurationMs,
+    tokens: estimatedTokens,
+  };
+}
+
 async function handleApi(request, response, url) {
   assertApiAccess(request);
   const key = `${request.method} ${url.pathname}`;
   let result;
   if (key === "GET /api/dashboard") result = await dashboard();
   else if (key === "GET /api/history") result = await getHistory(true);
-  else if (key === "POST /api/diagnostics") result = await createDiagnostics();
   else if (key === "GET /api/proxy/compatibility") result = await inspectProxyCompatibility(true);
   else if (key === "POST /api/proxy/install") result = await installProxy();
   else if (key === "POST /api/proxy/start") result = await startProxy();
@@ -1307,6 +1515,22 @@ async function handleApi(request, response, url) {
     const body = await readBody(request);
     await deleteAccount(String(body.name || ""));
     result = { status: "ok" };
+  } else if (key === "POST /api/accounts/mode") {
+    const body = await readBody(request);
+    runtime.settings.autoRoundRobin = Boolean(body.autoRoundRobin);
+    if (body.activeAccountId !== undefined) {
+      runtime.settings.activeAccountId = String(body.activeAccountId || "").trim();
+    }
+    await saveSettings();
+    await applyAccountRouting();
+    result = { ok: true, autoRoundRobin: runtime.settings.autoRoundRobin, activeAccountId: runtime.settings.activeAccountId };
+  } else if (key === "POST /api/accounts/select") {
+    const body = await readBody(request);
+    runtime.settings.activeAccountId = String(body.accountId || "").trim();
+    runtime.settings.autoRoundRobin = false;
+    await saveSettings();
+    await applyAccountRouting();
+    result = { ok: true, autoRoundRobin: false, activeAccountId: runtime.settings.activeAccountId };
   } else if (key === "PUT /api/settings") {
     const body = await readBody(request);
     const next = validateSettings(body);
@@ -1317,6 +1541,9 @@ async function handleApi(request, response, url) {
   } else if (key === "POST /api/codex/prepare") {
     const body = await readBody(request);
     result = await prepareCodex(body.model || "");
+  } else if (key === "POST /api/codex/model" || key === "POST /api/codex/switch-model") {
+    const body = await readBody(request);
+    result = await switchCodexModel(body.model || "");
   } else if (key === "POST /api/codex/activate") {
     const body = await readBody(request);
     result = await activateCodex(body.model || "");
@@ -1327,6 +1554,9 @@ async function handleApi(request, response, url) {
     result = await reapplyPreparedCodex();
   } else if (key === "POST /api/codex/restore") {
     result = await restoreCodexConfig();
+  } else if (key === "POST /api/benchmark") {
+    const body = await readBody(request);
+    result = await benchmarkModel(body.model || "");
   } else {
     const error = new Error("API 路径不存在");
     error.status = 404;
@@ -1357,11 +1587,107 @@ async function serveStatic(response, pathname) {
     "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream",
     "Content-Length": content.length,
     "Cache-Control": relative === "index.html" ? "no-store" : "no-cache",
-    "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
   });
   response.end(content);
+}
+
+const SUPPORTED_ANTIGRAVITY_MODELS = new Set([
+  "claude-opus-4-6-thinking",
+  "claude-sonnet-4-6",
+  "gemini-3.6-flash-high",
+  "gemini-3.7-flash-high",
+  "gemini-3-flash",
+  "gemini-3-flash-agent",
+  "gemini-3.1-flash-image",
+  "gemini-pro-agent",
+  "gemini-3.1-pro-low",
+  "gpt-oss-120b-medium",
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash-low",
+  "gemini-3.5-flash-extra-low",
+]);
+
+async function handleV1Proxy(request, response, url) {
+  if (!await proxyHealth()) {
+    try {
+      await startProxy();
+    } catch (e) {
+      sendJson(response, 503, { error: { message: `代理核心未就绪: ${e.message}`, type: "bridge_proxy_error" } });
+      return;
+    }
+  }
+
+  let bodyBuffer = null;
+  if (["POST", "PUT", "PATCH"].includes(request.method)) {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const rawBody = Buffer.concat(chunks).toString("utf8");
+    if (rawBody) {
+      try {
+        const parsed = JSON.parse(rawBody);
+        const activeModel = runtime.settings.defaultModel || "gemini-3.7-flash-high";
+        if (parsed.model && !SUPPORTED_ANTIGRAVITY_MODELS.has(parsed.model)) {
+          addLog("proxy", `[虚拟映射] 自动将模型 ${parsed.model} 重定向为活跃模型 ${activeModel}`);
+          parsed.model = activeModel;
+        }
+        bodyBuffer = Buffer.from(JSON.stringify(parsed));
+      } catch {
+        bodyBuffer = Buffer.from(rawBody);
+      }
+    }
+  }
+
+  const targetPath = `${url.pathname}${url.search}`;
+  const headers = { ...request.headers, host: `127.0.0.1:${runtime.settings.proxyPort}` };
+  if (bodyBuffer) {
+    delete headers["content-length"];
+    headers["content-length"] = String(Buffer.byteLength(bodyBuffer));
+  }
+
+  const proxyReq = http.request(`http://127.0.0.1:${runtime.settings.proxyPort}${targetPath}`, {
+    method: request.method,
+    headers,
+  }, (proxyRes) => {
+    const isSSE = String(proxyRes.headers["content-type"] || "").includes("text/event-stream");
+    if (isSSE) {
+      delete proxyRes.headers["content-length"];
+      response.writeHead(proxyRes.statusCode, proxyRes.headers);
+      let buffer = "";
+      proxyRes.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        buffer = buffer.replace(/"encrypted_content"\s*:\s*"cpa-[^"]*"/g, '"encrypted_content":null');
+        const lastDouble = buffer.lastIndexOf("\n\n");
+        if (lastDouble !== -1) {
+          const toSend = buffer.slice(0, lastDouble + 2);
+          buffer = buffer.slice(lastDouble + 2);
+          response.write(toSend);
+        }
+      });
+      proxyRes.on("end", () => {
+        if (buffer.length) {
+          response.write(buffer.replace(/"encrypted_content"\s*:\s*"cpa-[^"]*"/g, '"encrypted_content":null'));
+        }
+        response.end();
+      });
+    } else {
+      response.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(response);
+    }
+  });
+
+  proxyReq.on("error", (err) => {
+    if (!response.headersSent) {
+      sendJson(response, 502, { error: { message: err.message, type: "bridge_proxy_error" } });
+    }
+  });
+
+  if (bodyBuffer) {
+    proxyReq.write(bodyBuffer);
+  }
+  proxyReq.end();
 }
 
 async function requestHandler(request, response) {
@@ -1373,6 +1699,7 @@ async function requestHandler(request, response) {
     }
     const url = new URL(request.url, `http://${request.headers.host}`);
     if (url.pathname.startsWith("/api/")) await handleApi(request, response, url);
+    else if (url.pathname.startsWith("/v1/")) await handleV1Proxy(request, response, url);
     else await serveStatic(response, url.pathname);
   } catch (error) {
     if (String(error.code) === "ENOENT") {
@@ -1410,8 +1737,17 @@ export async function startServer() {
     server.once("error", reject);
     server.listen(UI_PORT, UI_HOST, resolve);
   });
-  addLog("app", `管理页已监听 http://${UI_HOST}:${UI_PORT}`);
-  setTimeout(() => resumeActiveTakeover().catch((error) => addError("recovery", error)), 50);
+  setTimeout(async () => {
+    try {
+      await resumeActiveTakeover();
+      const binary = detectProxyBinary();
+      if (binary && !await proxyHealth()) {
+        await startProxy();
+      }
+    } catch (error) {
+      addError("recovery", error);
+    }
+  }, 50);
   const quotaTimer = setInterval(scheduledQuotaRefresh, 60_000);
   quotaTimer.unref();
 
@@ -1439,7 +1775,6 @@ export async function startServer() {
   };
   process.once("SIGINT", () => void shutdown());
   process.once("SIGTERM", () => void shutdown());
-  if (process.env.BRIDGE_NO_OPEN !== "1") setTimeout(openDashboard, 300);
   return server;
 }
 

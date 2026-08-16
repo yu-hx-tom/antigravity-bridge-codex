@@ -61,7 +61,7 @@ function renderBusy() {
   $("#toggleCore").disabled = busy.has("core");
   $("#addAccount").disabled = busy.has("oauth");
   $("#refreshQuota").disabled = busy.has("quota") || dashboard?.quotaRefreshing;
-  $("#prepareProfile").disabled = busy.has("prepare");
+  $("#switchModel").disabled = busy.has("switch-model") || !dashboard?.models?.length;
   $("#restoreCodex").disabled = busy.size > 0 || !dashboard?.codex?.restoreAvailable;
   $("#createDiagnostics").disabled = busy.has("diagnostics");
 }
@@ -83,7 +83,7 @@ function renderHistory(history) {
     return;
   }
   const providers = (history.providers || []).map((item) => `${item.provider} ${item.count}`).join(" / ");
-  summary.textContent = `共 ${history.total} 个任务 · ${providers}`;
+  summary.textContent = `共 ${history.total} 个历史会话 · ${providers}`;
   target.innerHTML = (history.tasks || []).map((task) => `<article class="history-card ${task.readOnly ? "readonly" : "local"}">
     <div class="history-title"><strong>${escapeHtml(task.title)}</strong><span>${task.readOnly ? "只读" : "可继续"}</span></div>
     <div class="history-tags"><code>${escapeHtml(task.provider)}</code><code>${escapeHtml(task.model)}</code>${task.archived ? "<em>已归档</em>" : ""}</div>
@@ -107,12 +107,19 @@ function quotaHtml(account) {
   }
   const rows = (quota.models || []).filter((model) => model.remainingFraction !== null).slice(0, 6);
   if (!rows.length) return '<div class="health-line"><span class="health-dot warn"></span><span>上游未返回可解析的额度字段</span></div>';
-  return `<div class="quota-bars">${rows.map((model) => {
+  return `<div class="quota-rings">${rows.map((model) => {
     const percent = Math.round(model.remainingFraction * 100);
-    return `<div class="quota-row" title="重置：${escapeHtml(timeText(model.resetTime))}">
-      <span>${escapeHtml(model.displayName || model.id)}</span>
-      <span class="bar"><i class="${percent <= 20 ? "low" : ""}" style="width:${percent}%"></i></span>
-      <b>${percent}%</b>
+    const strokeDash = `${percent}, 100`;
+    const toneClass = percent <= 20 ? "low" : percent <= 50 ? "medium" : "good";
+    return `<div class="quota-ring-item" title="${escapeHtml(model.displayName || model.id)} · 重置时间：${escapeHtml(timeText(model.resetTime))}">
+      <svg class="ring-svg" viewBox="0 0 36 36">
+        <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+        <path class="ring-fill ${toneClass}" stroke-dasharray="${strokeDash}" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+      </svg>
+      <div class="ring-details">
+        <strong class="ring-percent">${percent}%</strong>
+        <span class="ring-label">${escapeHtml(model.displayName || model.id)}</span>
+      </div>
     </div>`;
   }).join("")}</div>`;
 }
@@ -160,7 +167,7 @@ function renderModels(models, selected) {
   else if (selected && models.some((model) => model.id === selected)) select.value = selected;
   const chosen = select.value;
   $("#modelChips").innerHTML = models.length
-    ? models.map((model) => `<span class="${model.id === chosen ? "selected" : ""}">${escapeHtml(model.id)}</span>`).join("")
+    ? models.map((model) => `<span class="${model.id === chosen ? "selected" : ""}" data-model-id="${escapeHtml(model.id)}" title="点击切换为此模型">${escapeHtml(model.displayName || model.id)}</span>`).join("")
     : "<span>尚无模型</span>";
   $("#modelCount").textContent = String(models.length);
   $("#launchModel").textContent = chosen || "等待模型同步";
@@ -205,7 +212,6 @@ function render(data) {
   $("#binaryPath").textContent = `核心路径：${proxy.binaryPath || "尚未配置"}${proxy.install.message ? ` · ${proxy.install.message}` : ""}`;
   $("#profilePath").textContent = data.codex.configPath;
   $("#launchCodex").querySelector("span").textContent = "一键启动 Codex";
-  $("#prepareProfile").textContent = "仅准备 API Service";
   $("#restoreCodex").textContent = "恢复原 Codex 配置";
   $("#dataPath").textContent = `运行数据：${data.paths.dataDir}`;
   renderAccounts(data.accounts);
@@ -281,10 +287,27 @@ $("#accountList").addEventListener("click", async (event) => {
 
 $("#modelSelect").addEventListener("change", () => renderModels(dashboard?.models || [], $("#modelSelect").value));
 
-$("#prepareProfile").addEventListener("click", () => runBusy("prepare", () => api("/api/codex/prepare", {
-  method: "POST",
-  body: JSON.stringify({ model: $("#modelSelect").value }),
-}), "Codex antigravity Profile 已生成").catch(() => {}));
+$("#modelChips").addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-model-id]");
+  if (chip) {
+    const model = chip.dataset.modelId;
+    $("#modelSelect").value = model;
+    renderModels(dashboard?.models || [], model);
+    runBusy("switch-model", () => api("/api/codex/model", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    }), `已切换当前 Codex 模型为 ${model}`).catch(() => {});
+  }
+});
+
+$("#switchModel").addEventListener("click", () => {
+  const model = $("#modelSelect").value;
+  if (!model) return;
+  runBusy("switch-model", () => api("/api/codex/model", {
+    method: "POST",
+    body: JSON.stringify({ model }),
+  }), `已切换当前 Codex 模型为 ${model}`).catch(() => {});
+});
 
 $("#launchCodex").addEventListener("click", () => runBusy("launch", async () => {
   const result = await api("/api/codex/launch", {
@@ -296,8 +319,8 @@ $("#launchCodex").addEventListener("click", () => runBusy("launch", async () => 
 }).catch(() => {}));
 
 $("#restoreCodex").addEventListener("click", () => {
-  if (!window.confirm("恢复接管前的 config.toml 和 auth.json？请先完全退出 Codex。")) return;
-  runBusy("restore", () => api("/api/codex/restore", { method: "POST", body: "{}" }), "原 Codex 配置与登录凭据已恢复").catch(() => {});
+  if (!window.confirm("恢复接管前的 config.toml？请先完全退出 Codex。")) return;
+  runBusy("restore", () => api("/api/codex/restore", { method: "POST", body: "{}" }), "原 Codex 配置已恢复").catch(() => {});
 });
 
 $("#createDiagnostics").addEventListener("click", () => runBusy("diagnostics", async () => {

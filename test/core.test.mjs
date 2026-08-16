@@ -69,7 +69,8 @@ test("models normalize, deduplicate and produce a Codex catalog", () => {
   assert.equal(models.length, 2);
   assert.equal(chooseDefaultModel(models), "gemini-3-flash");
   const catalog = createModelCatalog(models);
-  assert.equal(catalog.models.length, 2);
+  assert.ok(catalog.models.length >= 2);
+  assert.ok(catalog.models.some((m) => m.slug === "gpt-5.6-sol"));
   assert.equal(catalog.models[0].visibility, "list");
   assert.equal(catalog.models[0].apply_patch_tool_type, "freeform");
   assert.ok(catalog.models.every((model) => model.base_instructions?.length > 0));
@@ -80,20 +81,17 @@ test("models normalize, deduplicate and produce a Codex catalog", () => {
   assert.equal(catalog.models.find((model) => model.slug === "gemini-3-flash").display_name, "Gemini 3 Flash");
 });
 
-test("Codex profile uses Responses API and a protected token command", () => {
+test("Codex profile uses Responses API and direct client token", () => {
   const profile = createCodexProfile({
     port: 8317,
     model: "gemini-3-flash",
     catalogPath: "D:\\Data\\models.json",
-    tokenCommandPath: "D:\\Data\\get-token.ps1",
+    bearerToken: "agc_test_token",
   });
   assert.match(profile, /model_provider = "antigravity_local"/);
   assert.match(profile, /base_url = "http:\/\/127\.0\.0\.1:8317\/v1"/);
   assert.match(profile, /name = "Codex API Service"/);
-  assert.match(profile, /\[model_providers\.antigravity_local\.auth\]/);
-  assert.match(profile, /command = "powershell\.exe"/);
-  assert.match(profile, /D:\/Data\/get-token\.ps1/);
-  assert.doesNotMatch(profile, /local-secret|experimental_bearer_token/);
+  assert.match(profile, /experimental_bearer_token = "agc_test_token"/);
   assert.match(profile, /wire_api = "responses"/);
   assert.match(profile, /requires_openai_auth = false/);
   assert.match(profile, /\[windows\]\nsandbox = "unelevated"/);
@@ -130,7 +128,7 @@ sandbox = "elevated"
     port: 8317,
     model: "gemini-3-flash",
     catalogPath: "D:\\Data\\models.json",
-    tokenCommandPath: "D:\\Data\\get-token.ps1",
+    bearerToken: "agc_test_token",
   });
 
   assert.equal(config.match(/^model_provider\s*=/gm)?.length, 1);
@@ -138,9 +136,7 @@ sandbox = "elevated"
   assert.match(config, /model = "gemini-3-flash"/);
   assert.match(config, /model_provider = "antigravity_local"/);
   assert.match(config, /\[model_providers\.antigravity_local\]/);
-  assert.match(config, /\[model_providers\.antigravity_local\.auth\]/);
-  assert.match(config, /D:\/Data\/get-token\.ps1/);
-  assert.doesNotMatch(config, /local-secret/);
+  assert.match(config, /experimental_bearer_token = "agc_test_token"/);
   assert.match(config, /requires_openai_auth = false/);
   assert.match(config, /\[mcp_servers\.demo\]\ncommand = "demo"/);
   assert.match(config, /service_tier = "default"/);
