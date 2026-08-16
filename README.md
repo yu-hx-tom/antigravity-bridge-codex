@@ -1,6 +1,6 @@
-# Antigravity Codex Bridge
+# Antigravity Bridge Codex (ABC)
 
-**Antigravity Codex Bridge** 是一个专为 Windows 环境打造的高性能、企业级透明桥接与桌面控制台系统。它无缝打通 **Google Antigravity (Google Cloud Code Assist)** 内部多模型生态与 **OpenAI Codex Desktop / ChatGPT Desktop**，提供 Responses API 级协议兼容、事务级配置接管与安全回滚、双周期额度精准监控（5小时突发 + 周度全局）以及首字延迟（TTFT）与 Token/s 实时性能遥测。
+**Antigravity Bridge Codex (简称 ABC)** 是一个专为 Windows 环境打造的高性能、企业级透明桥接与桌面控制台系统。它无缝打通 **Google Antigravity (Google Cloud Code Assist)** 内部多模型生态与 **OpenAI Codex Desktop / ChatGPT Desktop**，提供 Responses API 级协议兼容、事务级配置接管与安全回滚、双周期额度精准监控（5小时突发 + 周度全局）以及首字延迟（TTFT）与 Token/s 实时性能遥测。
 
 ---
 
