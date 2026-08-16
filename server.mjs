@@ -548,22 +548,22 @@ function getAntigravityCockpitQuotaSummary(rawEmail) {
   try {
     const clean = extractCleanEmail(rawEmail);
     const dir = path.join(os.homedir(), ".antigravity_cockpit", "cache", "quota_api_v1_desktop", "authorized");
-    if (!fs.existsSync(dir)) return null;
+    if (!fsSync.existsSync(dir)) return null;
 
     if (clean) {
       const hash = crypto.createHash("sha256").update(clean).digest("hex");
       const directPath = path.join(dir, `${hash}.json`);
-      if (fs.existsSync(directPath)) {
-        const data = JSON.parse(fs.readFileSync(directPath, "utf8"));
+      if (fsSync.existsSync(directPath)) {
+        const data = JSON.parse(fsSync.readFileSync(directPath, "utf8"));
         if (data?.payload?.quota_summary) return data.payload.quota_summary;
       }
     }
 
-    const files = fs.readdirSync(dir);
+    const files = fsSync.readdirSync(dir);
     for (const f of files) {
       if (f.endsWith(".json")) {
         try {
-          const data = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+          const data = JSON.parse(fsSync.readFileSync(path.join(dir, f), "utf8"));
           if (data?.email && clean && (data.email.toLowerCase() === clean.toLowerCase() || data.email.includes(clean))) {
             if (data?.payload?.quota_summary) return data.payload.quota_summary;
           }
