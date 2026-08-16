@@ -274,7 +274,8 @@ namespace AntigravityDesktopClient
         private RadioButton rbSettingsCloseExit;
         private TextBox txtSettingsPort;
         private TextBox txtSettingsCodexPath;
-        private System.Windows.Forms.MenuItem trayModelsMenu;
+        private System.Windows.Forms.ToolStripMenuItem trayModelsMenu;
+        private System.Windows.Forms.ContextMenuStrip trayContextMenu;
 
         private bool autoStartBoot = false;
         private bool startMinimized = false;
@@ -467,23 +468,39 @@ namespace AntigravityDesktopClient
 
             this.Icon = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
 
-            System.Windows.Forms.ContextMenu menu = new System.Windows.Forms.ContextMenu();
-            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🌟 打开 Antigravity Bridge Codex (ABC)", (s, e) => ShowAndActivate()));
-            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🚀 启动 Codex", (s, e) => LaunchCodexService()));
-            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🛡️ 恢复官方配置", (s, e) => RestoreOfficialConfig()));
-            
-            trayModelsMenu = new System.Windows.Forms.MenuItem("🤖 快速切换生效模型");
-            trayModelsMenu.MenuItems.Add(new System.Windows.Forms.MenuItem("正在同步模型列表...", (s, e) => { }));
-            menu.MenuItems.Add(trayModelsMenu);
+            trayContextMenu = new System.Windows.Forms.ContextMenuStrip();
+            trayContextMenu.ShowImageMargin = false;
+            trayContextMenu.ShowCheckMargin = false;
+            trayContextMenu.Font = new System.Drawing.Font("Microsoft YaHei UI", 9f, System.Drawing.FontStyle.Regular);
+            trayContextMenu.Padding = new System.Windows.Forms.Padding(2, 3, 2, 3);
 
-            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("⚙️ 偏好设置", (s, e) => { ShowAndActivate(); OpenSettingsModal(); }));
-            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("-"));
-            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🚪 退出程序", (s, e) => ExitApplication()));
+            var itemOpen = new System.Windows.Forms.ToolStripMenuItem("🌟 打开主界面", null, (s, e) => ShowAndActivate()) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) };
+            itemOpen.Font = new System.Drawing.Font("Microsoft YaHei UI", 9f, System.Drawing.FontStyle.Bold);
+            trayContextMenu.Items.Add(itemOpen);
+
+            trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("🚀 启动 Codex", null, (s, e) => LaunchCodexService()) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
+            trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("🛡️ 恢复官方配置", null, (s, e) => RestoreOfficialConfig()) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
+            
+            trayModelsMenu = new System.Windows.Forms.ToolStripMenuItem("🤖 快速切换生效模型") { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) };
+            var dropDownMenu = trayModelsMenu.DropDown as System.Windows.Forms.ToolStripDropDownMenu;
+            if (dropDownMenu != null)
+            {
+                dropDownMenu.ShowImageMargin = false;
+                dropDownMenu.ShowCheckMargin = false;
+            }
+            trayModelsMenu.DropDown.Font = new System.Drawing.Font("Microsoft YaHei UI", 9f, System.Drawing.FontStyle.Regular);
+            trayModelsMenu.DropDown.Padding = new System.Windows.Forms.Padding(2, 3, 2, 3);
+            trayModelsMenu.DropDownItems.Add(new System.Windows.Forms.ToolStripMenuItem("正在同步模型列表...", null, (s, e) => { }));
+            trayContextMenu.Items.Add(trayModelsMenu);
+
+            trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("⚙️ 偏好设置", null, (s, e) => { ShowAndActivate(); OpenSettingsModal(); }) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
+            trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("🚪 退出程序", null, (s, e) => ExitApplication()) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
 
             trayIcon = new System.Windows.Forms.NotifyIcon();
             trayIcon.Text = "Antigravity Bridge Codex (ABC)";
             trayIcon.Icon = ico;
-            trayIcon.ContextMenu = menu;
+            trayIcon.ContextMenuStrip = trayContextMenu;
             trayIcon.Visible = true;
             trayIcon.DoubleClick += (s, e) => ShowAndActivate();
         }
@@ -1386,7 +1403,7 @@ namespace AntigravityDesktopClient
             if (trayModelsMenu == null || models == null || models.Count == 0) return;
             try
             {
-                trayModelsMenu.MenuItems.Clear();
+                trayModelsMenu.DropDownItems.Clear();
                 foreach (var item in models)
                 {
                     string mId = item.Key;
@@ -1394,13 +1411,18 @@ namespace AntigravityDesktopClient
                     bool isChecked = (mId == currentModel);
                     string menuText = (isChecked ? "✓ " : "    ") + mName;
                     
-                    System.Windows.Forms.MenuItem mItem = new System.Windows.Forms.MenuItem(menuText);
+                    System.Windows.Forms.ToolStripMenuItem mItem = new System.Windows.Forms.ToolStripMenuItem(menuText);
+                    mItem.Margin = new System.Windows.Forms.Padding(0, 1, 0, 1);
+                    if (isChecked)
+                    {
+                        mItem.Font = new System.Drawing.Font("Microsoft YaHei UI", 9f, System.Drawing.FontStyle.Bold);
+                    }
                     mItem.Click += (s, e) =>
                     {
                         OnModelSelected(mId);
                         trayIcon.ShowBalloonTip(1200, "生效模型已切换", "当前模型: " + mName, System.Windows.Forms.ToolTipIcon.Info);
                     };
-                    trayModelsMenu.MenuItems.Add(mItem);
+                    trayModelsMenu.DropDownItems.Add(mItem);
                 }
             }
             catch { }
