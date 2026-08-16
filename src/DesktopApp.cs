@@ -236,6 +236,7 @@ namespace AntigravityDesktopClient
         private TextBlock txtTtft;
         private bool isDockedLeft = false;
         private bool isDockedRight = false;
+        private bool isDragging = false;
 
         public Action OpenMainWindowAction;
         public Action OpenSettingsAction;
@@ -329,7 +330,21 @@ namespace AntigravityDesktopClient
             {
                 if (e.ButtonState == MouseButtonState.Pressed)
                 {
-                    try { DragMove(); } catch { }
+                    isDragging = true;
+                    BeginAnimation(Window.LeftProperty, null);
+                    BeginAnimation(Window.OpacityProperty, null);
+                    Opacity = 1.0;
+
+                    try
+                    {
+                        DragMove();
+                    }
+                    catch { }
+                    finally
+                    {
+                        isDragging = false;
+                    }
+
                     CheckDocking();
                     if (PositionChangedAction != null) PositionChangedAction(Left, Top);
                 }
@@ -342,28 +357,41 @@ namespace AntigravityDesktopClient
 
             MouseEnter += (s, e) =>
             {
+                if (isDragging) return;
+                double screenW = SystemParameters.WorkArea.Width;
+                double screenLeft = SystemParameters.WorkArea.Left;
+
                 if (isDockedLeft)
                 {
-                    AnimateLeft(0);
+                    AnimateLeft(screenLeft);
+                    AnimateOpacity(1.0);
                 }
                 else if (isDockedRight)
                 {
-                    AnimateLeft(SystemParameters.PrimaryScreenWidth - Width);
+                    AnimateLeft(screenLeft + screenW - Width);
+                    AnimateOpacity(1.0);
                 }
-                AnimateOpacity(1.0);
+                else
+                {
+                    AnimateOpacity(1.0);
+                }
             };
 
             MouseLeave += (s, e) =>
             {
+                if (isDragging) return;
+                double screenW = SystemParameters.WorkArea.Width;
+                double screenLeft = SystemParameters.WorkArea.Left;
+
                 if (isDockedLeft)
                 {
-                    AnimateLeft(-(Width - 16));
-                    AnimateOpacity(0.65);
+                    AnimateLeft(screenLeft - (Width - 18));
+                    AnimateOpacity(0.55);
                 }
                 else if (isDockedRight)
                 {
-                    AnimateLeft(SystemParameters.PrimaryScreenWidth - 16);
-                    AnimateOpacity(0.65);
+                    AnimateLeft(screenLeft + screenW - 18);
+                    AnimateOpacity(0.55);
                 }
             };
 
@@ -388,36 +416,68 @@ namespace AntigravityDesktopClient
 
         public void CheckDocking()
         {
-            double screenW = SystemParameters.PrimaryScreenWidth;
-            if (Left <= 25)
+            if (isDragging) return;
+
+            double screenW = SystemParameters.WorkArea.Width;
+            double screenLeft = SystemParameters.WorkArea.Left;
+            double currentLeft = Left;
+
+            if (currentLeft <= screenLeft + 20)
             {
                 isDockedLeft = true;
                 isDockedRight = false;
-                Left = 0;
+                BeginAnimation(Window.LeftProperty, null);
+                Left = screenLeft;
             }
-            else if (Left + Width >= screenW - 25)
+            else if (currentLeft + Width >= screenLeft + screenW - 20)
             {
                 isDockedLeft = false;
                 isDockedRight = true;
-                Left = screenW - Width;
+                BeginAnimation(Window.LeftProperty, null);
+                Left = screenLeft + screenW - Width;
             }
             else
             {
                 isDockedLeft = false;
                 isDockedRight = false;
+                BeginAnimation(Window.LeftProperty, null);
+                BeginAnimation(Window.OpacityProperty, null);
+                Opacity = 1.0;
             }
         }
 
         private void AnimateLeft(double targetLeft)
         {
-            var anim = new System.Windows.Media.Animation.DoubleAnimation(Left, targetLeft, TimeSpan.FromMilliseconds(180));
-            anim.DecelerationRatio = 0.8;
+            var anim = new System.Windows.Media.Animation.DoubleAnimation
+            {
+                From = Left,
+                To = targetLeft,
+                Duration = TimeSpan.FromMilliseconds(180),
+                DecelerationRatio = 0.8,
+                FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+            };
+            anim.Completed += (s, e) =>
+            {
+                BeginAnimation(Window.LeftProperty, null);
+                Left = targetLeft;
+            };
             BeginAnimation(Window.LeftProperty, anim);
         }
 
         private void AnimateOpacity(double targetOpacity)
         {
-            var anim = new System.Windows.Media.Animation.DoubleAnimation(Opacity, targetOpacity, TimeSpan.FromMilliseconds(180));
+            var anim = new System.Windows.Media.Animation.DoubleAnimation
+            {
+                From = Opacity,
+                To = targetOpacity,
+                Duration = TimeSpan.FromMilliseconds(180),
+                FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+            };
+            anim.Completed += (s, e) =>
+            {
+                BeginAnimation(Window.OpacityProperty, null);
+                Opacity = targetOpacity;
+            };
             BeginAnimation(Window.OpacityProperty, anim);
         }
 
@@ -1694,9 +1754,9 @@ namespace AntigravityDesktopClient
                     }
                     else
                     {
-                        // Default position: Top right corner of primary screen
-                        floatingHud.Left = SystemParameters.PrimaryScreenWidth - floatingHud.Width - 40;
-                        floatingHud.Top = 60;
+                        // Default position: Top center of desktop
+                        floatingHud.Left = SystemParameters.WorkArea.Left + (SystemParameters.WorkArea.Width - floatingHud.Width) / 2;
+                        floatingHud.Top = SystemParameters.WorkArea.Top + 80;
                     }
                 }
                 floatingHud.Show();
