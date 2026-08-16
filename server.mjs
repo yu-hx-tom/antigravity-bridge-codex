@@ -1679,16 +1679,44 @@ async function handleV1Proxy(request, response, url) {
     headers["content-length"] = String(Buffer.byteLength(bodyBuffer));
   }
 
+  const startTime = Date.now();
+  let firstChunkAt = 0;
+  let responseBytes = 0;
+
   const proxyReq = http.request(`http://127.0.0.1:${runtime.settings.proxyPort}${targetPath}`, {
     method: request.method,
     headers,
   }, (proxyRes) => {
+    const recordTelemetry = () => {
+      if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300) {
+        const durMs = Date.now() - startTime;
+        const ttft = Math.max((firstChunkAt || Date.now()) - startTime, 10);
+        const estimatedTokens = Math.max(Math.round(responseBytes / 3.2), 1);
+        const genSec = Math.max((durMs - ttft) / 1000, 0.05);
+        const tps = Math.round((estimatedTokens / genSec) * 10) / 10;
+
+        runtime.telemetry.totalRequests++;
+        runtime.telemetry.totalTokens += estimatedTokens;
+        runtime.telemetry.lastTokensPerSec = tps;
+        runtime.telemetry.lastTtftMs = ttft;
+        runtime.telemetry.avgTokensPerSec = runtime.telemetry.avgTokensPerSec > 0
+          ? Math.round(((runtime.telemetry.avgTokensPerSec * 0.6) + (tps * 0.4)) * 10) / 10
+          : tps;
+        runtime.telemetry.avgTtftMs = runtime.telemetry.avgTtftMs > 0
+          ? Math.round((runtime.telemetry.avgTtftMs * 0.6) + (ttft * 0.4))
+          : ttft;
+        runtime.telemetry.lastActivityAt = new Date().toISOString();
+      }
+    };
+
     const isSSE = String(proxyRes.headers["content-type"] || "").includes("text/event-stream");
     if (isSSE) {
       delete proxyRes.headers["content-length"];
       response.writeHead(proxyRes.statusCode, proxyRes.headers);
       let buffer = "";
       proxyRes.on("data", (chunk) => {
+        if (!firstChunkAt) firstChunkAt = Date.now();
+        responseBytes += chunk.length;
         buffer += chunk.toString("utf8");
         buffer = buffer.replace(/"encrypted_content"\s*:\s*"cpa-[^"]*"/g, '"encrypted_content":null');
         const lastDouble = buffer.lastIndexOf("\n\n");
@@ -1702,11 +1730,20 @@ async function handleV1Proxy(request, response, url) {
         if (buffer.length) {
           response.write(buffer.replace(/"encrypted_content"\s*:\s*"cpa-[^"]*"/g, '"encrypted_content":null'));
         }
+        recordTelemetry();
         response.end();
       });
     } else {
       response.writeHead(proxyRes.statusCode, proxyRes.headers);
-      proxyRes.pipe(response);
+      proxyRes.on("data", (chunk) => {
+        if (!firstChunkAt) firstChunkAt = Date.now();
+        responseBytes += chunk.length;
+        response.write(chunk);
+      });
+      proxyRes.on("end", () => {
+        recordTelemetry();
+        response.end();
+      });
     }
   });
 
