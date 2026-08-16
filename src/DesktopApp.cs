@@ -1297,11 +1297,11 @@ namespace AntigravityDesktopClient
                 {
                     Background = new SolidColorBrush(ColCard),
                     BorderBrush = (!autoRoundRobin && isThisAccountActive) ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder),
-                    BorderThickness = new Thickness((!autoRoundRobin && isThisAccountActive) ? 2 : 1),
-                    CornerRadius = new CornerRadius(16),
-                    Padding = new Thickness(24, 20, 24, 20),
-                    Margin = new Thickness(0, 0, 0, 16),
-                    Effect = new DropShadowEffect { Color = (!autoRoundRobin && isThisAccountActive) ? ColPrimary : System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = (!autoRoundRobin && isThisAccountActive) ? 14 : 12, Opacity = (!autoRoundRobin && isThisAccountActive) ? 0.16 : 0.04, ShadowDepth = 2 }
+                    BorderThickness = new Thickness((!autoRoundRobin && isThisAccountActive) ? 1.8 : 1),
+                    CornerRadius = new CornerRadius(12),
+                    Padding = new Thickness(16, 12, 16, 12),
+                    Margin = new Thickness(0, 0, 0, 10),
+                    Effect = new DropShadowEffect { Color = (!autoRoundRobin && isThisAccountActive) ? ColPrimary : System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = (!autoRoundRobin && isThisAccountActive) ? 10 : 8, Opacity = (!autoRoundRobin && isThisAccountActive) ? 0.14 : 0.03, ShadowDepth = 1.5 }
                 };
 
                 if (isClickable)
@@ -1324,7 +1324,7 @@ namespace AntigravityDesktopClient
                 }
 
                 Grid cardGrid = new Grid();
-                cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+                cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(195) });
                 cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
                 string status = acc.ContainsKey("status") ? acc["status"].ToString() : "";
@@ -1338,19 +1338,19 @@ namespace AntigravityDesktopClient
                 
                 Border avatar = new Border
                 {
-                    Width = 44,
-                    Height = 44,
-                    CornerRadius = new CornerRadius(22),
+                    Width = 38,
+                    Height = 38,
+                    CornerRadius = new CornerRadius(19),
                     Background = isReauthNeeded ? new SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 239, 68, 68)) : new SolidColorBrush(ColPrimaryLight),
                     BorderBrush = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary),
                     BorderThickness = new Thickness(1.5),
-                    Margin = new Thickness(0, 0, 12, 0)
+                    Margin = new Thickness(0, 0, 10, 0)
                 };
                 avatar.Child = new TextBlock
                 {
                     Text = (string.IsNullOrEmpty(email) ? "G" : email.Substring(0, 1).ToUpper()),
                     FontWeight = FontWeights.Bold,
-                    FontSize = 19,
+                    FontSize = 16,
                     Foreground = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
@@ -1358,30 +1358,30 @@ namespace AntigravityDesktopClient
                 userHeader.Children.Add(avatar);
 
                 StackPanel emailGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-                emailGroup.Children.Add(new TextBlock { Text = email, FontWeight = FontWeights.Bold, FontSize = 13.5, Foreground = new SolidColorBrush(ColTextMain), MaxWidth = 150, TextTrimming = TextTrimming.CharacterEllipsis });
+                emailGroup.Children.Add(new TextBlock { Text = email, FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMain), MaxWidth = 140, TextTrimming = TextTrimming.CharacterEllipsis });
                 
                 if (isReauthNeeded)
                 {
-                    emailGroup.Children.Add(new TextBlock { Text = "● 凭据已失效 (需重登)", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColRed), Margin = new Thickness(0, 3, 0, 0) });
+                    emailGroup.Children.Add(new TextBlock { Text = "● 凭据已失效 (需重登)", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColRed), Margin = new Thickness(0, 2, 0, 0) });
                 }
                 else if (health == "cooldown")
                 {
-                    emailGroup.Children.Add(new TextBlock { Text = "● 429 频控冷却中", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColAmber), Margin = new Thickness(0, 3, 0, 0) });
+                    emailGroup.Children.Add(new TextBlock { Text = "● 429 频控冷却中", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColAmber), Margin = new Thickness(0, 2, 0, 0) });
                 }
                 else if (health == "disabled")
                 {
-                    emailGroup.Children.Add(new TextBlock { Text = "● 账号已停用", FontSize = 10.5, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 3, 0, 0) });
+                    emailGroup.Children.Add(new TextBlock { Text = "● 账号已停用", FontSize = 9.5, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 2, 0, 0) });
                 }
                 else
                 {
-                    emailGroup.Children.Add(new TextBlock { Text = "● Google OAuth 就绪", FontSize = 10.5, Foreground = new SolidColorBrush(ColGreen), Margin = new Thickness(0, 3, 0, 0) });
+                    emailGroup.Children.Add(new TextBlock { Text = "● Google OAuth 就绪", FontSize = 9.5, Foreground = new SolidColorBrush(ColGreen), Margin = new Thickness(0, 2, 0, 0) });
                 }
                 
                 userHeader.Children.Add(emailGroup);
                 userLeft.Children.Add(userHeader);
 
                 // Routing Badges & Delete Button Row
-                StackPanel badgeRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 10, 0, 0) };
+                StackPanel badgeRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) };
 
                 if (autoRoundRobin)
                 {
@@ -1743,23 +1743,23 @@ namespace AntigravityDesktopClient
                 Background = new SolidColorBrush(ColCardMuted),
                 BorderBrush = new SolidColorBrush(ColBorder),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(12),
-                Padding = new Thickness(14, 12, 14, 12),
-                Margin = new Thickness(6, 0, 6, 0)
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(10, 8, 10, 8),
+                Margin = new Thickness(4, 0, 4, 0)
             };
             StackPanel sp = new StackPanel();
 
             // Header
-            StackPanel header = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
-            header.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMain) });
-            header.Children.Add(new TextBlock { Text = subtitle, FontSize = 9.5, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
+            StackPanel header = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
+            header.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, FontSize = 12, Foreground = new SolidColorBrush(ColTextMain) });
+            header.Children.Add(new TextBlock { Text = subtitle, FontSize = 9, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
             sp.Children.Add(header);
 
             // Row 1: 5-Hour Limit
-            sp.Children.Add(CreateQuotaMeterRow("5小时额度剩余", fiveHourPercent, fiveHourReset));
+            sp.Children.Add(CreateQuotaMeterRow("5小时剩余", fiveHourPercent, fiveHourReset));
 
             // Row 2: Weekly Limit
-            sp.Children.Add(CreateQuotaMeterRow("周度额度剩余", weeklyPercent, weeklyReset, true));
+            sp.Children.Add(CreateQuotaMeterRow("周剩余", weeklyPercent, weeklyReset, true));
 
             groupBorder.Child = sp;
             return groupBorder;
@@ -1772,23 +1772,23 @@ namespace AntigravityDesktopClient
                 Background = new SolidColorBrush(ColCard),
                 BorderBrush = new SolidColorBrush(ColBorder),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(10, 6, 10, 6),
-                Margin = new Thickness(0, 0, 0, isWeekly ? 0 : 6)
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 4, 8, 4),
+                Margin = new Thickness(0, 0, 0, isWeekly ? 0 : 4)
             };
             Grid grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             // Circular Ring
-            Grid circleGrid = new Grid { Width = 26, Height = 26 };
+            Grid circleGrid = new Grid { Width = 22, Height = 22, VerticalAlignment = VerticalAlignment.Center };
             System.Windows.Shapes.Ellipse bgCircle = new System.Windows.Shapes.Ellipse
             {
-                Width = 26,
-                Height = 26,
+                Width = 22,
+                Height = 22,
                 Stroke = new SolidColorBrush(ColBorder),
-                StrokeThickness = 3.0
+                StrokeThickness = 2.5
             };
             circleGrid.Children.Add(bgCircle);
 
@@ -1799,18 +1799,18 @@ namespace AntigravityDesktopClient
             System.Windows.Shapes.Path progressPath = new System.Windows.Shapes.Path
             {
                 Stroke = new SolidColorBrush(ringColor),
-                StrokeThickness = 3.0,
+                StrokeThickness = 2.5,
                 StrokeEndLineCap = PenLineCap.Round,
-                Data = CreateArcGeometry(13, 13, 11, 0, (percent / 100.0) * 359.9)
+                Data = CreateArcGeometry(11, 11, 9.5, 0, (percent / 100.0) * 359.9)
             };
             circleGrid.Children.Add(progressPath);
             Grid.SetColumn(circleGrid, 0);
             grid.Children.Add(circleGrid);
 
             // Center Text Info
-            StackPanel textGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
-            textGroup.Children.Add(new TextBlock { Text = label, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain) });
-            textGroup.Children.Add(new TextBlock { Text = resetInfo, FontSize = 9.5, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
+            StackPanel textGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+            textGroup.Children.Add(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain) });
+            textGroup.Children.Add(new TextBlock { Text = resetInfo, FontSize = 9, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
             Grid.SetColumn(textGroup, 1);
             grid.Children.Add(textGroup);
 
@@ -1819,10 +1819,11 @@ namespace AntigravityDesktopClient
             {
                 Text = percent + "%",
                 FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize = 13,
+                FontSize = 12.5,
                 FontWeight = FontWeights.Bold,
                 Foreground = new SolidColorBrush(ringColor),
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 2, 0)
             };
             Grid.SetColumn(txtPercent, 2);
             grid.Children.Add(txtPercent);
