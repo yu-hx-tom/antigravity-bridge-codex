@@ -2047,6 +2047,24 @@ namespace AntigravityDesktopClient
             catch { }
         }
 
+        private string FindNodeExecutablePath()
+        {
+            string[] candidates = new string[]
+            {
+                "D:\\WeGameApps\\node\\node.exe",
+                "C:\\Program Files\\nodejs\\node.exe",
+                "C:\\Program Files (x86)\\nodejs\\node.exe",
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "node", "node.exe")
+            };
+
+            foreach (string c in candidates)
+            {
+                if (File.Exists(c)) return c;
+            }
+
+            return "node.exe";
+        }
+
         private void StartBackendServer()
         {
             try
@@ -2055,7 +2073,7 @@ namespace AntigravityDesktopClient
                 Thread.Sleep(200);
 
                 ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = "node.exe";
+                psi.FileName = FindNodeExecutablePath();
                 psi.Arguments = "server.mjs";
                 psi.WorkingDirectory = appDir;
                 psi.CreateNoWindow = true;
