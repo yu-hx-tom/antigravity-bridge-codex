@@ -1367,7 +1367,7 @@ async function proxyState() {
   };
 }
 
-const CURRENT_VERSION = "0.2.0";
+const CURRENT_VERSION = "0.2.2";
 let cachedVersionCheck = { at: 0, result: null };
 
 async function checkAppVersion() {

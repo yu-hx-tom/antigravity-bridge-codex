@@ -1118,7 +1118,7 @@ namespace AntigravityDesktopClient
             badgeAbc.Child = new TextBlock { Text = "ABC", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
             titleLine.Children.Add(badgeAbc);
 
-            titleLine.Children.Add(new TextBlock { Text = "v0.2.0", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColPrimary), VerticalAlignment = VerticalAlignment.Center });
+            titleLine.Children.Add(new TextBlock { Text = "v0.2.2", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColPrimary), VerticalAlignment = VerticalAlignment.Center });
             titleGroup.Children.Add(titleLine);
             titleGroup.Children.Add(new TextBlock { Text = "LOCAL RUNTIME · 127.0.0.1 ONLY · ZERO DB CONTAMINATION", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMuted) });
             brandPanel.Children.Add(titleGroup);
@@ -2005,7 +2005,7 @@ namespace AntigravityDesktopClient
                     var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
                     if (data == null) return;
 
-                    string curVer = data.ContainsKey("currentVersion") ? data["currentVersion"].ToString() : "0.2.0";
+                    string curVer = data.ContainsKey("currentVersion") ? data["currentVersion"].ToString() : "0.2.2";
                     string latVer = data.ContainsKey("latestVersion") ? data["latestVersion"].ToString() : curVer;
                     bool hasUpdate = data.ContainsKey("hasUpdate") && Convert.ToBoolean(data["hasUpdate"]);
                     string releaseUrl = data.ContainsKey("releaseUrl") ? data["releaseUrl"].ToString() : "https://github.com/yu-hx-tom/antigravity-bridge-codex/releases";
