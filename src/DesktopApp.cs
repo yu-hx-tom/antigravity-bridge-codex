@@ -3320,6 +3320,7 @@ namespace AntigravityDesktopClient
             }
 
             System.Windows.Application app = new System.Windows.Application();
+            app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             app.Run(new MainWindow(isSilent));
 
             GC.KeepAlive(singleInstanceMutex);
