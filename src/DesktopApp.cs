@@ -311,6 +311,7 @@ namespace AntigravityDesktopClient
         public MainWindow()
         {
             appDir = AppDomain.CurrentDomain.BaseDirectory;
+            LoadThemePreference();
             InitializeComponent();
             InitializeTrayAndIcon();
             StartBackendServer();
@@ -882,9 +883,56 @@ namespace AntigravityDesktopClient
             return btn;
         }
 
+        private string GetUiPreferencePath()
+        {
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string dir = System.IO.Path.Combine(localAppData, "AntigravityCodexBridge");
+            if (!Directory.Exists(dir))
+            {
+                try { Directory.CreateDirectory(dir); } catch { }
+            }
+            return System.IO.Path.Combine(dir, "ui_preference.json");
+        }
+
+        private void LoadThemePreference()
+        {
+            try
+            {
+                string path = GetUiPreferencePath();
+                if (File.Exists(path))
+                {
+                    string content = File.ReadAllText(path);
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(content);
+                    if (dict != null && dict.ContainsKey("theme"))
+                    {
+                        string theme = dict["theme"].ToString().ToLower();
+                        isDarkMode = (theme == "dark");
+                        return;
+                    }
+                }
+            }
+            catch { }
+            isDarkMode = false;
+        }
+
+        private void SaveThemePreference()
+        {
+            try
+            {
+                string path = GetUiPreferencePath();
+                Dictionary<string, object> dict = new Dictionary<string, object>();
+                dict["theme"] = isDarkMode ? "dark" : "light";
+                dict["savedAt"] = DateTime.UtcNow.ToString("o");
+                string json = jsonSerializer.Serialize(dict);
+                File.WriteAllText(path, json, Encoding.UTF8);
+            }
+            catch { }
+        }
+
         private void ToggleTheme()
         {
             isDarkMode = !isDarkMode;
+            SaveThemePreference();
             BuildUI();
             FetchDashboardData();
             ShowToast(isDarkMode ? "🌙 已切换为 Slate 深色模式" : "☀️ 已切换为极简浅色模式");
