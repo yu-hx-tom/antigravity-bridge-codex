@@ -240,12 +240,7 @@ namespace AntigravityDesktopClient
         private TextBlock txtToastMessage;
         private DispatcherTimer toastTimer;
 
-        // Responsive Dual-Column Controls
-        private Grid responsiveGrid;
-        private Border panelRightSide;
-        private StackPanel logsStreamPanel;
-        private TextBlock txtRightStatusPort;
-        private TextBlock txtRightStatusBackup;
+        // Theme Controls
         private Border topBarBorder;
         private Border footerBorder;
         private ScrollViewer mainScroll;
@@ -683,30 +678,10 @@ namespace AntigravityDesktopClient
             Grid.SetColumn(accActions, 1);
             accHeaderGrid.Children.Add(accActions);
 
-            // Setup Responsive Dual-Column Grid
-            responsiveGrid = new Grid();
-            responsiveGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
-            responsiveGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star) });
-
-            // Left Column Content
-            StackPanel leftColumn = new StackPanel();
-            leftColumn.Children.Add(heroCard);
-            leftColumn.Children.Add(accHeaderGrid);
+            body.Children.Add(heroCard);
+            body.Children.Add(accHeaderGrid);
             panelAccounts = new StackPanel();
-            leftColumn.Children.Add(panelAccounts);
-            Grid.SetColumn(leftColumn, 0);
-            responsiveGrid.Children.Add(leftColumn);
-
-            // Right Column: Live Stream & Diagnostics Cards
-            panelRightSide = new Border();
-            StackPanel rightColumn = new StackPanel();
-            rightColumn.Children.Add(CreateLiveLogsCard());
-            rightColumn.Children.Add(CreateDiagnosticsCard());
-            panelRightSide.Child = rightColumn;
-            Grid.SetColumn(panelRightSide, 1);
-            responsiveGrid.Children.Add(panelRightSide);
-
-            body.Children.Add(responsiveGrid);
+            body.Children.Add(panelAccounts);
 
             mainScroll.Content = body;
             Grid.SetRow(mainScroll, 1);
@@ -789,8 +764,6 @@ namespace AntigravityDesktopClient
 
             StateChanged += MainWindow_StateChanged;
             Closing += MainWindow_Closing;
-            SizeChanged += (s, e) => UpdateResponsiveLayout();
-            UpdateResponsiveLayout();
         }
 
         private void ShowToast(string message)
@@ -897,136 +870,6 @@ namespace AntigravityDesktopClient
             }
             FetchDashboardData();
             ShowToast(isDarkMode ? "🌙 已切换为 Slate 深色模式" : "☀️ 已切换为极简浅色模式");
-        }
-
-        private void UpdateResponsiveLayout()
-        {
-            if (responsiveGrid == null || panelRightSide == null) return;
-            if (this.ActualWidth >= 1040)
-            {
-                responsiveGrid.ColumnDefinitions[0].Width = new GridLength(1.15, GridUnitType.Star);
-                responsiveGrid.ColumnDefinitions[1].Width = new GridLength(0.85, GridUnitType.Star);
-                panelRightSide.Visibility = Visibility.Visible;
-                panelRightSide.Margin = new Thickness(16, 0, 0, 0);
-            }
-            else
-            {
-                responsiveGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-                responsiveGrid.ColumnDefinitions[1].Width = new GridLength(0);
-                panelRightSide.Visibility = Visibility.Collapsed;
-                panelRightSide.Margin = new Thickness(0);
-            }
-        }
-
-        private Border CreateLiveLogsCard()
-        {
-            Border card = new Border
-            {
-                Background = new SolidColorBrush(ColCard),
-                BorderBrush = new SolidColorBrush(ColBorder),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(16, 12, 16, 12),
-                Margin = new Thickness(0, 0, 0, 14),
-                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 12, Opacity = isDarkMode ? 0.2 : 0.04, ShadowDepth = 1.5 }
-            };
-            StackPanel sp = new StackPanel();
-
-            Grid hGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
-            hGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            hGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            StackPanel titleSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            titleSp.Children.Add(new TextBlock { Text = "⚡ 实时调用流", FontWeight = FontWeights.Bold, FontSize = 13, Foreground = new SolidColorBrush(ColTextMain) });
-            titleSp.Children.Add(new TextBlock { Text = "LIVE STREAM", FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 8.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(6, 2, 0, 0) });
-            Grid.SetColumn(titleSp, 0);
-            hGrid.Children.Add(titleSp);
-
-            Border dotLive = new Border { Width = 7, Height = 7, CornerRadius = new CornerRadius(3.5), Background = new SolidColorBrush(ColGreen), VerticalAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(dotLive, 1);
-            hGrid.Children.Add(dotLive);
-            sp.Children.Add(hGrid);
-
-            logsStreamPanel = new StackPanel();
-            logsStreamPanel.Children.Add(new TextBlock { Text = "等待服务调用活动...", FontSize = 10.5, Foreground = new SolidColorBrush(ColTextMuted) });
-            sp.Children.Add(logsStreamPanel);
-
-            card.Child = sp;
-            return card;
-        }
-
-        private Border CreateDiagnosticsCard()
-        {
-            Border card = new Border
-            {
-                Background = new SolidColorBrush(ColCard),
-                BorderBrush = new SolidColorBrush(ColBorder),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(16, 12, 16, 12),
-                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 12, Opacity = isDarkMode ? 0.2 : 0.04, ShadowDepth = 1.5 }
-            };
-            StackPanel sp = new StackPanel();
-
-            TextBlock title = new TextBlock { Text = "🛡️ 运行环境与安全快照", FontWeight = FontWeights.Bold, FontSize = 13, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 8) };
-            sp.Children.Add(title);
-
-            // Row 1: Proxy Port
-            sp.Children.Add(CreateDiagInfoRow("本地代理端口", "127.0.0.1:8787", out txtRightStatusPort));
-            // Row 2: Codex Snapshot
-            sp.Children.Add(CreateDiagInfoRow("官方配置快照", "已就绪 · 关窗自动还原", out txtRightStatusBackup));
-
-            card.Child = sp;
-            return card;
-        }
-
-        private UIElement CreateDiagInfoRow(string label, string value, out TextBlock valTxt)
-        {
-            Grid g = new Grid { Margin = new Thickness(0, 0, 0, 5) };
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            TextBlock lbl = new TextBlock { Text = label, FontSize = 10.5, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(lbl, 0);
-            g.Children.Add(lbl);
-
-            valTxt = new TextBlock { Text = value, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-            Grid.SetColumn(valTxt, 1);
-            g.Children.Add(valTxt);
-            return g;
-        }
-
-        private UIElement CreateLogLine(string time, string level, string message)
-        {
-            Border b = new Border
-            {
-                Background = new SolidColorBrush(ColCardMuted),
-                CornerRadius = new CornerRadius(5),
-                Padding = new Thickness(7, 3, 7, 3),
-                Margin = new Thickness(0, 0, 0, 3)
-            };
-            Grid g = new Grid();
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            string timeOnly = time;
-            try
-            {
-                DateTime dt;
-                if (DateTime.TryParse(time, out dt)) timeOnly = dt.ToLocalTime().ToString("HH:mm:ss");
-            }
-            catch {}
-
-            TextBlock tTxt = new TextBlock { Text = timeOnly, FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 9, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
-            Grid.SetColumn(tTxt, 0);
-            g.Children.Add(tTxt);
-
-            TextBlock mTxt = new TextBlock { Text = message, FontSize = 9.5, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-            Grid.SetColumn(mTxt, 1);
-            g.Children.Add(mTxt);
-
-            b.Child = g;
-            return b;
         }
 
         private string GetFriendlyModelName(string modelId)
@@ -1372,34 +1215,6 @@ namespace AntigravityDesktopClient
             txtMetricAccounts.Text = accounts != null ? accounts.Count.ToString() : "0";
             RenderAccountsList(accounts);
 
-            // Right Panel Diagnostics & Live Logs Stream
-            if (txtRightStatusPort != null)
-            {
-                txtRightStatusPort.Text = isOnline ? "127.0.0.1:8787 (正常运行)" : "127.0.0.1:8787 (未运行)";
-                txtRightStatusPort.Foreground = isOnline ? new SolidColorBrush(ColGreen) : new SolidColorBrush(ColRed);
-            }
-            if (txtRightStatusBackup != null)
-            {
-                txtRightStatusBackup.Text = isCodexActive ? "已接管 · 关窗自动还原" : "官方原生 · 快照就绪";
-                txtRightStatusBackup.Foreground = isCodexActive ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColTextMain);
-            }
-
-            var logs = data.ContainsKey("logs") ? data["logs"] as ArrayList : null;
-            if (logsStreamPanel != null && logs != null && logs.Count > 0)
-            {
-                logsStreamPanel.Children.Clear();
-                int count = 0;
-                for (int i = logs.Count - 1; i >= 0 && count < 6; i--)
-                {
-                    var logDict = logs[i] as Dictionary<string, object>;
-                    if (logDict == null) continue;
-                    string time = logDict.ContainsKey("time") ? logDict["time"].ToString() : "";
-                    string msg = logDict.ContainsKey("message") ? logDict["message"].ToString() : "";
-                    string level = logDict.ContainsKey("level") ? logDict["level"].ToString() : "info";
-                    logsStreamPanel.Children.Add(CreateLogLine(time, level, msg));
-                    count++;
-                }
-            }
         }
 
         private void UpdateRoundRobinButtonUI()
