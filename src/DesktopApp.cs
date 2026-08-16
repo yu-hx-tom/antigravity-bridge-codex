@@ -252,6 +252,7 @@ namespace AntigravityDesktopClient
         private Button btnToggleRoundRobin;
         private Button btnRefreshQuota;
         private Button btnToggleTheme;
+        private Button btnOpenSettings;
         private ModelPickerControl modelPicker;
         private StackPanel panelAccounts;
         private TextBlock txtCodexStatus;
@@ -264,6 +265,23 @@ namespace AntigravityDesktopClient
         private Border toastContainer;
         private TextBlock txtToastMessage;
         private DispatcherTimer toastTimer;
+
+        // Settings Modal Controls & State
+        private Border settingsOverlay;
+        private CheckBox chkSettingsAutoStart;
+        private CheckBox chkSettingsStartMinimized;
+        private RadioButton rbSettingsCloseTray;
+        private RadioButton rbSettingsCloseExit;
+        private TextBox txtSettingsPort;
+        private TextBox txtSettingsCodexPath;
+        private System.Windows.Forms.MenuItem trayModelsMenu;
+
+        private bool autoStartBoot = false;
+        private bool startMinimized = false;
+        private string closeAction = "tray"; // "tray" or "exit"
+        private int proxyPort = 8787;
+        private string customCodexPath = "";
+        private bool isSilentStart = false;
 
         // Theme Controls
         private Grid rootGrid;
@@ -308,10 +326,11 @@ namespace AntigravityDesktopClient
             }
         }
 
-        public MainWindow()
+        public MainWindow(bool isSilent = false)
         {
+            isSilentStart = isSilent;
             appDir = AppDomain.CurrentDomain.BaseDirectory;
-            LoadThemePreference();
+            LoadUiPreferences();
             InitializeComponent();
             InitializeTrayAndIcon();
             StartBackendServer();
@@ -320,6 +339,12 @@ namespace AntigravityDesktopClient
             refreshTimer.Interval = TimeSpan.FromSeconds(2.5);
             refreshTimer.Tick += (s, e) => FetchDashboardData();
             refreshTimer.Start();
+
+            if (isSilentStart)
+            {
+                WindowState = WindowState.Minimized;
+                Hide();
+            }
         }
 
         private Bitmap GenerateBrandBitmap(int size)
@@ -398,6 +423,12 @@ namespace AntigravityDesktopClient
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🌟 打开 AntigravityCodexBridge", (s, e) => ShowAndActivate()));
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🚀 启动 Codex", (s, e) => LaunchCodexService()));
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🛡️ 恢复官方配置", (s, e) => RestoreOfficialConfig()));
+            
+            trayModelsMenu = new System.Windows.Forms.MenuItem("🤖 快速切换生效模型");
+            trayModelsMenu.MenuItems.Add(new System.Windows.Forms.MenuItem("正在同步模型列表...", (s, e) => { }));
+            menu.MenuItems.Add(trayModelsMenu);
+
+            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("⚙️ 偏好设置", (s, e) => { ShowAndActivate(); OpenSettingsModal(); }));
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("-"));
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🚪 退出程序", (s, e) => ExitApplication()));
 
@@ -502,8 +533,13 @@ namespace AntigravityDesktopClient
             
             btnToggleTheme = CreateButton(isDarkMode ? "☀️ 浅色" : "🌙 深色", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
             btnToggleTheme.Padding = new Thickness(12, 6, 12, 6);
-            btnToggleTheme.Margin = new Thickness(0, 0, 10, 0);
+            btnToggleTheme.Margin = new Thickness(0, 0, 8, 0);
             btnToggleTheme.Click += (s, e) => ToggleTheme();
+
+            btnOpenSettings = CreateButton("⚙️ 设置", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
+            btnOpenSettings.Padding = new Thickness(12, 6, 12, 6);
+            btnOpenSettings.Margin = new Thickness(0, 0, 10, 0);
+            btnOpenSettings.Click += (s, e) => OpenSettingsModal();
 
             btnToggleCore = CreateButton(isCoreRunning ? "停止服务" : "启动核心", ColCardMuted, new SolidColorBrush(ColTextMain), 12);
             btnToggleCore.Padding = new Thickness(14, 6, 14, 6);
@@ -512,6 +548,7 @@ namespace AntigravityDesktopClient
             rightTop.Children.Add(dotTopStatus);
             rightTop.Children.Add(txtTopStatus);
             rightTop.Children.Add(btnToggleTheme);
+            rightTop.Children.Add(btnOpenSettings);
             rightTop.Children.Add(btnToggleCore);
             Grid.SetColumn(rightTop, 2);
             topGrid.Children.Add(rightTop);
@@ -800,6 +837,198 @@ namespace AntigravityDesktopClient
             toastSp.Children.Add(txtToastMessage);
             toastContainer.Child = toastSp;
             rootGrid.Children.Add(toastContainer);
+
+            // 5. SETTINGS MODAL OVERLAY
+            settingsOverlay = new Border
+            {
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(175, 0, 0, 0)),
+                Visibility = Visibility.Collapsed,
+                Opacity = 0
+            };
+            Grid.SetRowSpan(settingsOverlay, 3);
+            Panel.SetZIndex(settingsOverlay, 9998);
+
+            Border modalCard = new Border
+            {
+                Width = 560,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(16),
+                Padding = new Thickness(28, 22, 28, 24),
+                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 32, Opacity = isDarkMode ? 0.45 : 0.16, ShadowDepth = 6 }
+            };
+
+            StackPanel modalSp = new StackPanel();
+
+            // Modal Header (Title + Subtitle + Close '✕')
+            Grid mHead = new Grid { Margin = new Thickness(0, 0, 0, 16) };
+            mHead.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            mHead.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel mTitleSp = new StackPanel();
+            mTitleSp.Children.Add(new TextBlock { Text = "⚙️ 偏好设置", FontWeight = FontWeights.Bold, FontSize = 17, Foreground = new SolidColorBrush(ColTextMain) });
+            mTitleSp.Children.Add(new TextBlock { Text = "自定义系统启动、网络端口与 Codex 联动行为", FontSize = 11, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 2, 0, 0) });
+            Grid.SetColumn(mTitleSp, 0);
+            mHead.Children.Add(mTitleSp);
+
+            Button btnCloseModal = new Button
+            {
+                Content = "✕",
+                FontSize = 14,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(ColTextMuted),
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Padding = new Thickness(6, 2, 6, 2)
+            };
+            btnCloseModal.Click += (s, e) => CloseSettingsModal();
+            Grid.SetColumn(btnCloseModal, 1);
+            mHead.Children.Add(btnCloseModal);
+            modalSp.Children.Add(mHead);
+
+            // Group 1: System & Startup
+            modalSp.Children.Add(new TextBlock { Text = "🚀 系统与启动行为", FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(0, 4, 0, 8) });
+
+            chkSettingsAutoStart = new CheckBox
+            {
+                Content = " 开机自启动 (Windows 登录时自动在后台启动)",
+                IsChecked = autoStartBoot,
+                FontSize = 12,
+                Foreground = new SolidColorBrush(ColTextMain),
+                Margin = new Thickness(4, 0, 0, 6),
+                Cursor = Cursors.Hand
+            };
+            chkSettingsAutoStart.Checked += (s, e) => { if (chkSettingsStartMinimized != null) chkSettingsStartMinimized.IsEnabled = true; };
+            chkSettingsAutoStart.Unchecked += (s, e) => { if (chkSettingsStartMinimized != null) chkSettingsStartMinimized.IsEnabled = false; };
+            modalSp.Children.Add(chkSettingsAutoStart);
+
+            chkSettingsStartMinimized = new CheckBox
+            {
+                Content = " 开机静默启动至系统托盘 (不弹出大窗口打扰)",
+                IsChecked = startMinimized,
+                IsEnabled = autoStartBoot,
+                FontSize = 12,
+                Foreground = new SolidColorBrush(ColTextMain),
+                Margin = new Thickness(24, 0, 0, 10),
+                Cursor = Cursors.Hand
+            };
+            modalSp.Children.Add(chkSettingsStartMinimized);
+
+            modalSp.Children.Add(new TextBlock { Text = "关闭窗口时的行为：", FontSize = 11.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(4, 2, 0, 6) });
+            StackPanel rbSp = new StackPanel { Margin = new Thickness(20, 0, 0, 12) };
+            rbSettingsCloseTray = new RadioButton
+            {
+                GroupName = "closeAction",
+                Content = " 最小化到系统托盘后台运行 (推荐)",
+                IsChecked = (closeAction != "exit"),
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(ColTextMain),
+                Margin = new Thickness(0, 0, 0, 4),
+                Cursor = Cursors.Hand
+            };
+            rbSettingsCloseExit = new RadioButton
+            {
+                GroupName = "closeAction",
+                Content = " 彻底退出程序并自动还原 Codex 官方配置",
+                IsChecked = (closeAction == "exit"),
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(ColTextMain),
+                Cursor = Cursors.Hand
+            };
+            rbSp.Children.Add(rbSettingsCloseTray);
+            rbSp.Children.Add(rbSettingsCloseExit);
+            modalSp.Children.Add(rbSp);
+
+            // Group 2: Network & Proxy Port
+            modalSp.Children.Add(new TextBlock { Text = "🌐 网络与端口", FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(0, 6, 0, 8) });
+            Grid portGrid = new Grid { Margin = new Thickness(4, 0, 0, 12) };
+            portGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+            portGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
+            portGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            TextBlock lblPort = new TextBlock { Text = "本地代理端口：", FontSize = 12, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(lblPort, 0);
+            portGrid.Children.Add(lblPort);
+
+            txtSettingsPort = new TextBox
+            {
+                Text = proxyPort.ToString(),
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Padding = new Thickness(8, 4, 8, 4),
+                Background = new SolidColorBrush(ColCardMuted),
+                Foreground = new SolidColorBrush(ColTextMain),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(txtSettingsPort, 1);
+            portGrid.Children.Add(txtSettingsPort);
+
+            TextBlock lblPortHint = new TextBlock { Text = " (默认 8787)", FontSize = 11, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+            Grid.SetColumn(lblPortHint, 2);
+            portGrid.Children.Add(lblPortHint);
+            modalSp.Children.Add(portGrid);
+
+            // Group 3: Custom Codex Path
+            modalSp.Children.Add(new TextBlock { Text = "🛡️ Codex 目录配置", FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(0, 4, 0, 6) });
+            modalSp.Children.Add(new TextBlock { Text = "Codex 安装与数据路径（留空则自动检测）：", FontSize = 11, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(4, 0, 0, 4) });
+
+            Grid pathGrid = new Grid { Margin = new Thickness(4, 0, 0, 18) };
+            pathGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pathGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });
+
+            txtSettingsCodexPath = new TextBox
+            {
+                Text = customCodexPath,
+                FontSize = 11.5,
+                Padding = new Thickness(8, 5, 8, 5),
+                Background = new SolidColorBrush(ColCardMuted),
+                Foreground = new SolidColorBrush(ColTextMain),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(txtSettingsCodexPath, 0);
+            pathGrid.Children.Add(txtSettingsCodexPath);
+
+            Button btnBrowse = CreateButton("📁 浏览", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
+            btnBrowse.Padding = new Thickness(8, 4, 8, 4);
+            btnBrowse.Margin = new Thickness(8, 0, 0, 0);
+            btnBrowse.Click += (s, e) =>
+            {
+                var dlg = new System.Windows.Forms.FolderBrowserDialog();
+                dlg.Description = "选择 Codex 安装或数据目录";
+                if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                {
+                    txtSettingsCodexPath.Text = dlg.SelectedPath;
+                }
+            };
+            Grid.SetColumn(btnBrowse, 1);
+            pathGrid.Children.Add(btnBrowse);
+            modalSp.Children.Add(pathGrid);
+
+            // Modal Actions (Save & Cancel)
+            StackPanel mActions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            Button btnCancel = CreateButton("取消", ColCardMuted, new SolidColorBrush(ColTextMain), 12);
+            btnCancel.Padding = new Thickness(16, 6, 16, 6);
+            btnCancel.Margin = new Thickness(0, 0, 10, 0);
+            btnCancel.Click += (s, e) => CloseSettingsModal();
+            mActions.Children.Add(btnCancel);
+
+            Button btnSave = CreateButton("💾 保存设置", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
+            btnSave.Padding = new Thickness(20, 6, 20, 6);
+            btnSave.Click += (s, e) => SaveSettingsFromModal();
+            mActions.Children.Add(btnSave);
+
+            modalSp.Children.Add(mActions);
+            modalCard.Child = modalSp;
+            settingsOverlay.Child = modalCard;
+            rootGrid.Children.Add(settingsOverlay);
         }
 
         private void ShowToast(string message)
@@ -883,6 +1112,57 @@ namespace AntigravityDesktopClient
             return btn;
         }
 
+        private const string RUN_REG_KEY = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string APP_REG_NAME = "AntigravityCodexBridge";
+
+        private bool CheckRegistryAutoStart(out bool isSilent)
+        {
+            isSilent = false;
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RUN_REG_KEY, false))
+                {
+                    if (key != null)
+                    {
+                        object val = key.GetValue(APP_REG_NAME);
+                        if (val != null)
+                        {
+                            string cmd = val.ToString();
+                            isSilent = cmd.IndexOf("--silent", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                       cmd.IndexOf("--minimized", StringComparison.OrdinalIgnoreCase) >= 0;
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private void SetRegistryAutoStart(bool enable, bool silent)
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RUN_REG_KEY, true))
+                {
+                    if (key != null)
+                    {
+                        if (enable)
+                        {
+                            string exePath = Process.GetCurrentProcess().MainModule.FileName;
+                            string val = "\"" + exePath + "\"" + (silent ? " --silent" : "");
+                            key.SetValue(APP_REG_NAME, val);
+                        }
+                        else
+                        {
+                            key.DeleteValue(APP_REG_NAME, false);
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
         private string GetUiPreferencePath()
         {
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -894,7 +1174,7 @@ namespace AntigravityDesktopClient
             return System.IO.Path.Combine(dir, "ui_preference.json");
         }
 
-        private void LoadThemePreference()
+        private void LoadUiPreferences()
         {
             try
             {
@@ -903,25 +1183,53 @@ namespace AntigravityDesktopClient
                 {
                     string content = File.ReadAllText(path);
                     var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(content);
-                    if (dict != null && dict.ContainsKey("theme"))
+                    if (dict != null)
                     {
-                        string theme = dict["theme"].ToString().ToLower();
-                        isDarkMode = (theme == "dark");
-                        return;
+                        if (dict.ContainsKey("theme"))
+                        {
+                            string theme = dict["theme"].ToString().ToLower();
+                            isDarkMode = (theme == "dark");
+                        }
+                        if (dict.ContainsKey("closeAction"))
+                        {
+                            closeAction = dict["closeAction"].ToString().ToLower();
+                        }
+                        if (dict.ContainsKey("proxyPort"))
+                        {
+                            int p;
+                            if (int.TryParse(dict["proxyPort"].ToString(), out p) && p > 0 && p <= 65535) proxyPort = p;
+                        }
+                        if (dict.ContainsKey("customCodexPath"))
+                        {
+                            customCodexPath = dict["customCodexPath"].ToString();
+                        }
+                        if (dict.ContainsKey("startMinimized"))
+                        {
+                            startMinimized = Convert.ToBoolean(dict["startMinimized"]);
+                        }
                     }
                 }
             }
             catch { }
-            isDarkMode = false;
+
+            // Sync with actual registry state
+            bool isSilent;
+            autoStartBoot = CheckRegistryAutoStart(out isSilent);
+            if (autoStartBoot) startMinimized = isSilent;
         }
 
-        private void SaveThemePreference()
+        private void SaveUiPreferences()
         {
             try
             {
                 string path = GetUiPreferencePath();
                 Dictionary<string, object> dict = new Dictionary<string, object>();
                 dict["theme"] = isDarkMode ? "dark" : "light";
+                dict["autoStartBoot"] = autoStartBoot;
+                dict["startMinimized"] = startMinimized;
+                dict["closeAction"] = closeAction;
+                dict["proxyPort"] = proxyPort;
+                dict["customCodexPath"] = customCodexPath;
                 dict["savedAt"] = DateTime.UtcNow.ToString("o");
                 string json = jsonSerializer.Serialize(dict);
                 File.WriteAllText(path, json, Encoding.UTF8);
@@ -932,10 +1240,108 @@ namespace AntigravityDesktopClient
         private void ToggleTheme()
         {
             isDarkMode = !isDarkMode;
-            SaveThemePreference();
+            SaveUiPreferences();
             BuildUI();
             FetchDashboardData();
             ShowToast(isDarkMode ? "🌙 已切换为 Slate 深色模式" : "☀️ 已切换为极简浅色模式");
+        }
+
+        private void OpenSettingsModal()
+        {
+            if (chkSettingsAutoStart != null) chkSettingsAutoStart.IsChecked = autoStartBoot;
+            if (chkSettingsStartMinimized != null)
+            {
+                chkSettingsStartMinimized.IsChecked = startMinimized;
+                chkSettingsStartMinimized.IsEnabled = autoStartBoot;
+            }
+            if (rbSettingsCloseTray != null) rbSettingsCloseTray.IsChecked = (closeAction != "exit");
+            if (rbSettingsCloseExit != null) rbSettingsCloseExit.IsChecked = (closeAction == "exit");
+            if (txtSettingsPort != null) txtSettingsPort.Text = proxyPort.ToString();
+            if (txtSettingsCodexPath != null) txtSettingsCodexPath.Text = customCodexPath;
+
+            if (settingsOverlay != null)
+            {
+                settingsOverlay.Visibility = Visibility.Visible;
+                var fadeIn = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200));
+                settingsOverlay.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+            }
+        }
+
+        private void CloseSettingsModal()
+        {
+            if (settingsOverlay != null)
+            {
+                var fadeOut = new System.Windows.Media.Animation.DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(150));
+                fadeOut.Completed += (s, e) => { settingsOverlay.Visibility = Visibility.Collapsed; };
+                settingsOverlay.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+            }
+        }
+
+        private void SaveSettingsFromModal()
+        {
+            autoStartBoot = chkSettingsAutoStart != null && chkSettingsAutoStart.IsChecked == true;
+            startMinimized = chkSettingsStartMinimized != null && chkSettingsStartMinimized.IsChecked == true;
+            closeAction = (rbSettingsCloseExit != null && rbSettingsCloseExit.IsChecked == true) ? "exit" : "tray";
+
+            if (txtSettingsPort != null)
+            {
+                int p;
+                if (int.TryParse(txtSettingsPort.Text.Trim(), out p) && p > 0 && p <= 65535)
+                {
+                    proxyPort = p;
+                }
+            }
+
+            if (txtSettingsCodexPath != null)
+            {
+                customCodexPath = txtSettingsCodexPath.Text.Trim();
+            }
+
+            SetRegistryAutoStart(autoStartBoot, startMinimized);
+            SaveUiPreferences();
+
+            if (isCoreRunning && !string.IsNullOrEmpty(customCodexPath))
+            {
+                ThreadPool.QueueUserWorkItem((state) =>
+                {
+                    try
+                    {
+                        var body = new Dictionary<string, object>();
+                        body["codexHome"] = customCodexPath;
+                        string json = jsonSerializer.Serialize(body);
+                        SendApiPost("api/settings", json);
+                    }
+                    catch { }
+                });
+            }
+
+            CloseSettingsModal();
+            ShowToast("⚙️ 偏好设置已成功保存");
+        }
+
+        private void UpdateTrayModelsMenu(List<KeyValuePair<string, string>> models, string currentModel)
+        {
+            if (trayModelsMenu == null || models == null || models.Count == 0) return;
+            try
+            {
+                trayModelsMenu.MenuItems.Clear();
+                foreach (var item in models)
+                {
+                    string mId = item.Key;
+                    string mName = item.Value;
+                    bool isChecked = (mId == currentModel);
+                    string menuText = (isChecked ? "✓ " : "    ") + mName;
+                    
+                    System.Windows.Forms.MenuItem mItem = new System.Windows.Forms.MenuItem(menuText);
+                    mItem.Click += (s, e) =>
+                    {
+                        OnModelSelected(mId);
+                        trayIcon.ShowBalloonTip(1200, "生效模型已切换", "当前模型: " + mName, System.Windows.Forms.ToolTipIcon.Info);
+                    };
+                    trayModelsMenu.MenuItems.Add(mItem);
+                }
+            }
+            catch { }
         }
 
         private string GetFriendlyModelName(string modelId)
@@ -1035,6 +1441,12 @@ namespace AntigravityDesktopClient
 
         private void MainWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            if (closeAction == "exit")
+            {
+                ExitApplication();
+                return;
+            }
+
             e.Cancel = true;
             Hide();
             if (!CheckHasShownTrayTipPersisted())
@@ -1274,6 +1686,7 @@ namespace AntigravityDesktopClient
                     modelList.Add(new KeyValuePair<string, string>(id, displayName));
                 }
                 modelPicker.SetModels(modelList, currentModel);
+                UpdateTrayModelsMenu(modelList, currentModel);
             }
 
             // Accounts List
@@ -2266,9 +2679,23 @@ namespace AntigravityDesktopClient
         }
 
         [STAThread]
-        public static void Main()
+        public static void Main(string[] args)
         {
             EnableHighDpiAwareness();
+
+            bool isSilent = false;
+            if (args != null)
+            {
+                foreach (string a in args)
+                {
+                    if (a.Equals("--silent", StringComparison.OrdinalIgnoreCase) ||
+                        a.Equals("--minimized", StringComparison.OrdinalIgnoreCase))
+                    {
+                        isSilent = true;
+                        break;
+                    }
+                }
+            }
 
             bool createdNew;
             singleInstanceMutex = new Mutex(true, "Global\\AntigravityCodexBridge_SingleInstance_Mutex", out createdNew);
@@ -2286,7 +2713,7 @@ namespace AntigravityDesktopClient
             }
 
             System.Windows.Application app = new System.Windows.Application();
-            app.Run(new MainWindow());
+            app.Run(new MainWindow(isSilent));
 
             GC.KeepAlive(singleInstanceMutex);
         }
