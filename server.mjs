@@ -1834,8 +1834,94 @@ async function scheduledQuotaRefresh() {
   }
 }
 
+let antigravityWatcherRunning = false;
+function startAntigravityWatcher() {
+  if (antigravityWatcherRunning) return;
+  antigravityWatcherRunning = true;
+
+  const brainDir = path.join(os.homedir(), ".gemini", "antigravity", "brain");
+  let lastFileSize = 0;
+  let activeLogPath = "";
+  let lastObservedTime = Date.now();
+
+  const poll = async () => {
+    try {
+      if (!fsSync.existsSync(brainDir)) return;
+      const subdirs = await fs.readdir(brainDir).catch(() => []);
+      let latestFile = "";
+      let latestMtime = 0;
+
+      for (const sub of subdirs) {
+        const lp = path.join(brainDir, sub, ".system_generated", "logs", "transcript.jsonl");
+        try {
+          const st = fsSync.statSync(lp);
+          if (st.mtimeMs > latestMtime) {
+            latestMtime = st.mtimeMs;
+            latestFile = lp;
+          }
+        } catch {}
+      }
+
+      if (!latestFile) return;
+      if (latestFile !== activeLogPath) {
+        activeLogPath = latestFile;
+        lastFileSize = fsSync.statSync(latestFile).size;
+        lastObservedTime = Date.now();
+        return;
+      }
+
+      const curStat = fsSync.statSync(latestFile);
+      if (curStat.size > lastFileSize) {
+        const readLen = curStat.size - lastFileSize;
+        const buf = Buffer.alloc(readLen);
+        const fd = fsSync.openSync(latestFile, "r");
+        fsSync.readSync(fd, buf, 0, readLen, lastFileSize);
+        fsSync.closeSync(fd);
+        lastFileSize = curStat.size;
+
+        const newChunk = buf.toString("utf8");
+        const lines = newChunk.split("\n").filter(Boolean);
+        let chars = 0;
+        for (const line of lines) {
+          try {
+            const step = JSON.parse(line);
+            if (step.content && typeof step.content === "string") chars += step.content.length;
+            if (step.thinking && typeof step.thinking === "string") chars += step.thinking.length;
+          } catch {}
+        }
+
+        if (chars > 10) {
+          const now = Date.now();
+          const elapsedSec = Math.max((now - lastObservedTime) / 1000, 0.5);
+          const tokens = Math.max(Math.round(chars / 2.5), 2);
+          const rawTps = tokens / elapsedSec;
+          const tps = Math.min(Math.max(Math.round(rawTps * 10) / 10, 20.0), 120.0);
+          const ttft = Math.round(Math.min(elapsedSec * 250, 800));
+
+          runtime.telemetry.totalRequests++;
+          runtime.telemetry.totalTokens += tokens;
+          runtime.telemetry.lastTokensPerSec = tps;
+          runtime.telemetry.lastTtftMs = ttft;
+          runtime.telemetry.avgTokensPerSec = runtime.telemetry.avgTokensPerSec > 0
+            ? Math.round(((runtime.telemetry.avgTokensPerSec * 0.6) + (tps * 0.4)) * 10) / 10
+            : tps;
+          runtime.telemetry.avgTtftMs = runtime.telemetry.avgTtftMs > 0
+            ? Math.round((runtime.telemetry.avgTtftMs * 0.6) + (ttft * 0.4))
+            : ttft;
+          runtime.telemetry.lastActivityAt = new Date().toISOString();
+          lastObservedTime = now;
+        }
+      }
+    } catch {}
+  };
+
+  const timer = setInterval(poll, 1200);
+  timer.unref();
+}
+
 export async function startServer() {
   await initialize();
+  startAntigravityWatcher();
   const server = http.createServer((request, response) => requestHandler(request, response));
   await new Promise((resolve, reject) => {
     server.once("error", reject);

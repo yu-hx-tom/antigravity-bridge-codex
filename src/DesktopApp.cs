@@ -233,10 +233,8 @@ namespace AntigravityDesktopClient
     {
         private Border pillBorder;
         private Canvas circleCanvas;
-        private System.Windows.Shapes.Ellipse outerTrack;
-        private System.Windows.Shapes.Ellipse innerTrack;
-        private System.Windows.Shapes.Path pathOuterArc;
-        private System.Windows.Shapes.Path pathInnerArc;
+        private System.Windows.Shapes.Ellipse quotaTrack;
+        private System.Windows.Shapes.Path pathQuotaArc;
         private TextBlock txtQuotaPercent;
         private TextBlock txtTps;
         private TextBlock txtTtft;
@@ -250,7 +248,6 @@ namespace AntigravityDesktopClient
         private double lastTps = 0;
         private int lastTtft = 0;
         private int lastQuota5h = -1;
-        private int lastQuotaWeekly = -1;
 
         public Action OpenMainWindowAction;
         public Action OpenSettingsAction;
@@ -264,7 +261,7 @@ namespace AntigravityDesktopClient
             Background = System.Windows.Media.Brushes.Transparent;
             Topmost = true;
             ShowInTaskbar = false;
-            Width = 216;
+            Width = 210;
             Height = 40;
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
@@ -284,52 +281,34 @@ namespace AntigravityDesktopClient
             mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
             mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            // 1. Dual Concentric Ring (Left)
+            // 1. Single 5-Hour Quota Circular Ring (Left)
             circleCanvas = new Canvas
             {
                 Width = 34,
                 Height = 34,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "当前生效账号的 5 小时短期可用额度百分比"
             };
 
-            outerTrack = new System.Windows.Shapes.Ellipse
+            quotaTrack = new System.Windows.Shapes.Ellipse
             {
                 Width = 28,
                 Height = 28,
-                StrokeThickness = 2.0
+                StrokeThickness = 2.2
             };
-            Canvas.SetLeft(outerTrack, 3);
-            Canvas.SetTop(outerTrack, 3);
-            circleCanvas.Children.Add(outerTrack);
+            Canvas.SetLeft(quotaTrack, 3);
+            Canvas.SetTop(quotaTrack, 3);
+            circleCanvas.Children.Add(quotaTrack);
 
-            pathOuterArc = new System.Windows.Shapes.Path
+            pathQuotaArc = new System.Windows.Shapes.Path
             {
-                StrokeThickness = 2.2,
+                StrokeThickness = 2.5,
                 StrokeLineJoin = PenLineJoin.Round,
                 StrokeStartLineCap = PenLineCap.Round,
                 StrokeEndLineCap = PenLineCap.Round
             };
-            circleCanvas.Children.Add(pathOuterArc);
-
-            innerTrack = new System.Windows.Shapes.Ellipse
-            {
-                Width = 20,
-                Height = 20,
-                StrokeThickness = 1.8
-            };
-            Canvas.SetLeft(innerTrack, 7);
-            Canvas.SetTop(innerTrack, 7);
-            circleCanvas.Children.Add(innerTrack);
-
-            pathInnerArc = new System.Windows.Shapes.Path
-            {
-                StrokeThickness = 2.0,
-                StrokeLineJoin = PenLineJoin.Round,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round
-            };
-            circleCanvas.Children.Add(pathInnerArc);
+            circleCanvas.Children.Add(pathQuotaArc);
 
             txtQuotaPercent = new TextBlock
             {
@@ -565,14 +544,9 @@ namespace AntigravityDesktopClient
                     }
                 }
 
-                if (outerTrack != null)
+                if (quotaTrack != null)
                 {
-                    outerTrack.Stroke = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(51, 65, 85) : System.Windows.Media.Color.FromRgb(226, 232, 240));
-                }
-
-                if (innerTrack != null)
-                {
-                    innerTrack.Stroke = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(30, 41, 59) : System.Windows.Media.Color.FromRgb(241, 245, 249));
+                    quotaTrack.Stroke = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(51, 65, 85) : System.Windows.Media.Color.FromRgb(226, 232, 240));
                 }
 
                 if (txtQuotaPercent != null)
@@ -595,7 +569,7 @@ namespace AntigravityDesktopClient
                     iconTimer.Fill = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(52, 211, 153) : System.Windows.Media.Color.FromRgb(5, 150, 105));
                 }
 
-                UpdateData(lastTps, lastTtft, lastQuota5h, lastQuotaWeekly);
+                UpdateData(lastTps, lastTtft, lastQuota5h);
             }));
         }
 
@@ -668,15 +642,14 @@ namespace AntigravityDesktopClient
 
         public void UpdateTelemetry(double tps, int ttft)
         {
-            UpdateData(tps, ttft, lastQuota5h, lastQuotaWeekly);
+            UpdateData(tps, ttft, lastQuota5h);
         }
 
-        public void UpdateData(double tps, int ttft, int quota5h, int quotaWeekly)
+        public void UpdateData(double tps, int ttft, int quota5h)
         {
             lastTps = tps;
             lastTtft = ttft;
             lastQuota5h = quota5h;
-            lastQuotaWeekly = quotaWeekly;
 
             Dispatcher.Invoke(new Action(() =>
             {
@@ -702,48 +675,23 @@ namespace AntigravityDesktopClient
                     txtTtft.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(100, 116, 139));
                 }
 
-                // Update Dual Concentric Circles
-                if (quotaWeekly >= 0)
-                {
-                    double wAngle = Math.Min(quotaWeekly, 100) * 359.9 / 100.0;
-                    pathOuterArc.Data = CreateArcGeometry(17, 17, 14, 0, Math.Max(wAngle, 1.0));
-                    pathOuterArc.Stroke = (quotaWeekly >= 50)
-                        ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(16, 185, 129)) // Emerald
-                        : ((quotaWeekly >= 20)
-                            ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(245, 158, 11)) // Amber
-                            : new SolidColorBrush(System.Windows.Media.Color.FromRgb(239, 68, 68))); // Red
-                }
-                else
-                {
-                    pathOuterArc.Data = null;
-                }
-
+                // Update 5-Hour Quota Single Ring
                 if (quota5h >= 0)
                 {
                     double hAngle = Math.Min(quota5h, 100) * 359.9 / 100.0;
-                    pathInnerArc.Data = CreateArcGeometry(17, 17, 10, 0, Math.Max(hAngle, 1.0));
-                    pathInnerArc.Stroke = (quota5h >= 50)
+                    pathQuotaArc.Data = CreateArcGeometry(17, 17, 14, 0, Math.Max(hAngle, 1.0));
+                    pathQuotaArc.Stroke = (quota5h >= 50)
                         ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(6, 182, 212)) // Cyan
                         : ((quota5h >= 20)
                             ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(251, 191, 36)) // Amber
                             : new SolidColorBrush(System.Windows.Media.Color.FromRgb(244, 63, 94))); // Rose
+
+                    txtQuotaPercent.Text = quota5h + "%";
+                    txtQuotaPercent.FontSize = (quota5h == 100) ? 7.8 : 8.8;
                 }
                 else
                 {
-                    pathInnerArc.Data = null;
-                }
-
-                int displayPercent = (quota5h >= 0 && quotaWeekly >= 0)
-                    ? Math.Min(quota5h, quotaWeekly)
-                    : (quota5h >= 0 ? quota5h : (quotaWeekly >= 0 ? quotaWeekly : -1));
-
-                if (displayPercent >= 0)
-                {
-                    txtQuotaPercent.Text = displayPercent + "%";
-                    txtQuotaPercent.FontSize = (displayPercent == 100) ? 7.8 : 8.8;
-                }
-                else
-                {
+                    pathQuotaArc.Data = null;
                     txtQuotaPercent.Text = "--%";
                     txtQuotaPercent.FontSize = 8.2;
                 }
@@ -2483,7 +2431,7 @@ namespace AntigravityDesktopClient
 
             if (floatingHud != null && floatingHud.IsVisible)
             {
-                floatingHud.UpdateData(currentTps, currentTtft, hud5h, hudWeekly);
+                floatingHud.UpdateData(currentTps, currentTtft, hud5h);
             }
 
             // Models
