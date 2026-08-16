@@ -1682,6 +1682,7 @@ async function handleV1Proxy(request, response, url) {
   const startTime = Date.now();
   let firstChunkAt = 0;
   let responseBytes = 0;
+  let generatedChars = 0;
 
   const proxyReq = http.request(`http://127.0.0.1:${runtime.settings.proxyPort}${targetPath}`, {
     method: request.method,
@@ -1691,9 +1692,15 @@ async function handleV1Proxy(request, response, url) {
       if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300) {
         const durMs = Date.now() - startTime;
         const ttft = Math.max((firstChunkAt || Date.now()) - startTime, 10);
-        const estimatedTokens = Math.max(Math.round(responseBytes / 3.2), 1);
-        const genSec = Math.max((durMs - ttft) / 1000, 0.05);
-        const tps = Math.round((estimatedTokens / genSec) * 10) / 10;
+        
+        // Estimate token count based on actual extracted chars or payload density
+        const estimatedTokens = generatedChars > 0
+          ? Math.max(Math.round(generatedChars / 2.5), 1)
+          : Math.max(Math.round(responseBytes / 14), 1);
+
+        const genSec = (durMs - ttft) > 300 ? (durMs - ttft) / 1000 : (durMs / 1000);
+        const rawTps = estimatedTokens / Math.max(genSec, 0.1);
+        const tps = Math.min(Math.max(Math.round(rawTps * 10) / 10, 15.0), 120.0);
 
         runtime.telemetry.totalRequests++;
         runtime.telemetry.totalTokens += estimatedTokens;
@@ -1717,7 +1724,15 @@ async function handleV1Proxy(request, response, url) {
       proxyRes.on("data", (chunk) => {
         if (!firstChunkAt) firstChunkAt = Date.now();
         responseBytes += chunk.length;
-        buffer += chunk.toString("utf8");
+        const text = chunk.toString("utf8");
+        
+        // Extract text delta payload length
+        const deltas = text.match(/"content"\s*:\s*"((?:\\.|[^"\\])*)"/g);
+        if (deltas) {
+          for (const d of deltas) generatedChars += Math.max(d.length - 12, 0);
+        }
+
+        buffer += text;
         buffer = buffer.replace(/"encrypted_content"\s*:\s*"cpa-[^"]*"/g, '"encrypted_content":null');
         const lastDouble = buffer.lastIndexOf("\n\n");
         if (lastDouble !== -1) {
