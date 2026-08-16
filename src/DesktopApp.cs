@@ -976,16 +976,6 @@ namespace AntigravityDesktopClient
             // Row 2: Codex Snapshot
             sp.Children.Add(CreateDiagInfoRow("官方配置快照", "已就绪 · 关窗自动还原", out txtRightStatusBackup));
 
-            // Clean Cache Button
-            Button btnClean = CreateButton("🧹 存储管家 / 瘦身建议", ColCardMuted, new SolidColorBrush(ColTextMain), 11);
-            btnClean.Padding = new Thickness(10, 5, 10, 5);
-            btnClean.Margin = new Thickness(0, 6, 0, 0);
-            btnClean.Click += (s, e) =>
-            {
-                ShowToast("💡 提示：可清理 ~/.antigravity_cockpit/instances/codex 释放空间");
-            };
-            sp.Children.Add(btnClean);
-
             card.Child = sp;
             return card;
         }
@@ -1520,19 +1510,31 @@ namespace AntigravityDesktopClient
                     Background = new SolidColorBrush(ColCard),
                     BorderBrush = new SolidColorBrush(ColBorder),
                     BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(14),
-                    Padding = new Thickness(28),
+                    CornerRadius = new CornerRadius(12),
+                    Padding = new Thickness(24),
                     Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 10, Opacity = 0.03, ShadowDepth = 1 }
                 };
                 emptyCard.Child = new TextBlock
                 {
                     Text = "尚未登录 Google 账号，点击右上角【+ 登录 Google 账号】完成授权后即可开始使用。",
                     Foreground = new SolidColorBrush(ColTextMuted),
-                    FontSize = 13,
+                    FontSize = 12.5,
                     HorizontalAlignment = HorizontalAlignment.Center
                 };
                 panelAccounts.Children.Add(emptyCard);
                 return;
+            }
+
+            bool isTwoColumns = accounts.Count > 1;
+            Grid accGrid = new Grid();
+            if (isTwoColumns)
+            {
+                accGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                accGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            }
+            else
+            {
+                accGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             }
 
             for (int i = 0; i < accounts.Count; i++)
@@ -1544,417 +1546,420 @@ namespace AntigravityDesktopClient
                 string accId = acc.ContainsKey("id") ? acc["id"].ToString() : (acc.ContainsKey("name") ? acc["name"].ToString() : email);
 
                 bool isThisAccountActive = (accId == activeAccountId || email == activeAccountId || (string.IsNullOrEmpty(activeAccountId) && i == 0));
+                Border card = BuildAccountCard(acc, accId, email, i, isThisAccountActive, autoRoundRobin);
 
-                string capturedId = accId;
-                string capturedEmail = email;
-                bool isClickable = (!isThisAccountActive || autoRoundRobin);
-
-                Border card = new Border
+                if (isTwoColumns)
                 {
-                    Background = new SolidColorBrush(ColCard),
-                    BorderBrush = (!autoRoundRobin && isThisAccountActive) ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder),
-                    BorderThickness = new Thickness((!autoRoundRobin && isThisAccountActive) ? 1.8 : 1),
-                    CornerRadius = new CornerRadius(12),
-                    Padding = new Thickness(16, 12, 16, 12),
-                    Margin = new Thickness(0, 0, 0, 10),
-                    Effect = new DropShadowEffect { Color = (!autoRoundRobin && isThisAccountActive) ? ColPrimary : System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = (!autoRoundRobin && isThisAccountActive) ? 10 : 8, Opacity = (!autoRoundRobin && isThisAccountActive) ? 0.14 : 0.03, ShadowDepth = 1.5 }
-                };
-
-                if (isClickable)
-                {
-                    card.Cursor = Cursors.Hand;
-                    card.MouseEnter += (s, e) =>
+                    int col = i % 2;
+                    int row = i / 2;
+                    while (accGrid.RowDefinitions.Count <= row)
                     {
-                        card.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(147, 197, 253));
-                        card.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(248, 250, 252));
-                    };
-                    card.MouseLeave += (s, e) =>
-                    {
-                        card.BorderBrush = (!autoRoundRobin && isThisAccountActive) ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder);
-                        card.Background = new SolidColorBrush(ColCard);
-                    };
-                    card.MouseLeftButtonUp += (s, e) =>
-                    {
-                        SelectActiveAccount(capturedId, capturedEmail);
-                    };
+                        accGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                    }
+                    card.Margin = new Thickness(col == 0 ? 0 : 4, 0, col == 1 ? 0 : 4, 8);
+                    Grid.SetColumn(card, col);
+                    Grid.SetRow(card, row);
+                    accGrid.Children.Add(card);
                 }
-
-                Grid cardGrid = new Grid();
-                cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(195) });
-                cardGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-                string status = acc.ContainsKey("status") ? acc["status"].ToString() : "";
-                string statusMessage = acc.ContainsKey("statusMessage") ? acc["statusMessage"].ToString() : "";
-                string health = acc.ContainsKey("health") ? acc["health"].ToString() : status;
-                bool isReauthNeeded = health == "reauth" || status == "reauth";
-
-                // Left: Avatar, Email, & Routing Status / Selection Badge
-                StackPanel userLeft = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-                StackPanel userHeader = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                
-                Border avatar = new Border
+                else
                 {
-                    Width = 38,
-                    Height = 38,
-                    CornerRadius = new CornerRadius(19),
-                    Background = isReauthNeeded ? new SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 239, 68, 68)) : new SolidColorBrush(ColPrimaryLight),
-                    BorderBrush = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary),
-                    BorderThickness = new Thickness(1.5),
-                    Margin = new Thickness(0, 0, 10, 0)
+                    card.Margin = new Thickness(0, 0, 0, 8);
+                    Grid.SetColumn(card, 0);
+                    accGrid.Children.Add(card);
+                }
+            }
+
+            panelAccounts.Children.Add(accGrid);
+        }
+
+        private Border BuildAccountCard(Dictionary<string, object> acc, string accId, string email, int index, bool isThisAccountActive, bool autoRoundRobin)
+        {
+            string capturedId = accId;
+            string capturedEmail = email;
+            bool isClickable = (!isThisAccountActive || autoRoundRobin);
+
+            Border card = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = (!autoRoundRobin && isThisAccountActive) ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness((!autoRoundRobin && isThisAccountActive) ? 1.8 : 1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(12, 10, 12, 10),
+                Effect = new DropShadowEffect { Color = (!autoRoundRobin && isThisAccountActive) ? ColPrimary : System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = (!autoRoundRobin && isThisAccountActive) ? 10 : 8, Opacity = (!autoRoundRobin && isThisAccountActive) ? 0.14 : 0.03, ShadowDepth = 1.5 }
+            };
+
+            if (isClickable)
+            {
+                card.Cursor = Cursors.Hand;
+                card.MouseEnter += (s, e) =>
+                {
+                    card.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(147, 197, 253));
+                    card.Background = new SolidColorBrush(isDarkMode ? System.Windows.Media.Color.FromRgb(26, 36, 56) : System.Windows.Media.Color.FromRgb(248, 250, 252));
                 };
-                avatar.Child = new TextBlock
+                card.MouseLeave += (s, e) =>
                 {
-                    Text = (string.IsNullOrEmpty(email) ? "G" : email.Substring(0, 1).ToUpper()),
-                    FontWeight = FontWeights.Bold,
-                    FontSize = 16,
-                    Foreground = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary),
-                    HorizontalAlignment = HorizontalAlignment.Center,
+                    card.BorderBrush = (!autoRoundRobin && isThisAccountActive) ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder);
+                    card.Background = new SolidColorBrush(ColCard);
+                };
+                card.MouseLeftButtonUp += (s, e) =>
+                {
+                    SelectActiveAccount(capturedId, capturedEmail);
+                };
+            }
+
+            StackPanel cardStack = new StackPanel();
+
+            string status = acc.ContainsKey("status") ? acc["status"].ToString() : "";
+            string statusMessage = acc.ContainsKey("statusMessage") ? acc["statusMessage"].ToString() : "";
+            string health = acc.ContainsKey("health") ? acc["health"].ToString() : status;
+            bool isReauthNeeded = health == "reauth" || status == "reauth";
+
+            // 1. Top Header Row (Avatar, Email, Status Dot, Active Pill, Delete Button)
+            Grid headerGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel userLeft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            
+            Border avatar = new Border
+            {
+                Width = 24,
+                Height = 24,
+                CornerRadius = new CornerRadius(12),
+                Background = isReauthNeeded ? new SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 239, 68, 68)) : new SolidColorBrush(ColPrimaryLight),
+                BorderBrush = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary),
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            avatar.Child = new TextBlock
+            {
+                Text = (string.IsNullOrEmpty(email) ? "G" : email.Substring(0, 1).ToUpper()),
+                FontWeight = FontWeights.Bold,
+                FontSize = 11.5,
+                Foreground = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            userLeft.Children.Add(avatar);
+
+            TextBlock txtEmail = new TextBlock
+            {
+                Text = email,
+                FontWeight = FontWeights.Bold,
+                FontSize = 12,
+                Foreground = new SolidColorBrush(ColTextMain),
+                MaxWidth = 175,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            userLeft.Children.Add(txtEmail);
+
+            TextBlock statusTxt = new TextBlock
+            {
+                Text = isReauthNeeded ? "● 需重登" : (health == "cooldown" ? "● 429冷却" : (health == "disabled" ? "● 停用" : "● 就绪")),
+                FontSize = 9.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = isReauthNeeded ? new SolidColorBrush(ColRed) : (health == "cooldown" ? new SolidColorBrush(ColAmber) : (health == "disabled" ? new SolidColorBrush(ColTextMuted) : new SolidColorBrush(ColGreen))),
+                Margin = new Thickness(6, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            userLeft.Children.Add(statusTxt);
+            Grid.SetColumn(userLeft, 0);
+            headerGrid.Children.Add(userLeft);
+
+            // Right actions in Header
+            StackPanel userRight = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+            if (autoRoundRobin)
+            {
+                Border pillAuto = new Border
+                {
+                    Background = isReauthNeeded ? new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 239, 68, 68)) : new SolidColorBrush(ColPrimaryLight),
+                    CornerRadius = new CornerRadius(5),
+                    Padding = new Thickness(6, 2, 6, 2)
+                };
+                pillAuto.Child = new TextBlock
+                {
+                    Text = isReauthNeeded ? "⚠️ 跳过轮询" : "🔄 自动轮询",
+                    FontSize = 9.5,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary)
+                };
+                userRight.Children.Add(pillAuto);
+            }
+            else
+            {
+                if (isThisAccountActive)
+                {
+                    Border pillActive = new Border
+                    {
+                        Background = new SolidColorBrush(ColPrimaryLight),
+                        BorderBrush = new SolidColorBrush(ColPrimary),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(5),
+                        Padding = new Thickness(6, 2, 6, 2)
+                    };
+                    pillActive.Child = new TextBlock { Text = "⭐ 生效中", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
+                    userRight.Children.Add(pillActive);
+                }
+                else
+                {
+                    Border pillIdle = new Border
+                    {
+                        Background = new SolidColorBrush(ColCardMuted),
+                        BorderBrush = new SolidColorBrush(ColBorder),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(5),
+                        Padding = new Thickness(6, 2, 6, 2)
+                    };
+                    pillIdle.Child = new TextBlock { Text = "👉 指定", FontSize = 9.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMuted) };
+                    userRight.Children.Add(pillIdle);
+                }
+            }
+
+            Button btnDeleteAcc = new Button
+            {
+                Content = "🗑️",
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(ColTextMuted),
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(6, 0, 0, 0),
+                Padding = new Thickness(3, 1, 3, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "移除此账号凭据"
+            };
+            btnDeleteAcc.MouseEnter += (s, e) => { btnDeleteAcc.Foreground = new SolidColorBrush(ColRed); };
+            btnDeleteAcc.MouseLeave += (s, e) => { btnDeleteAcc.Foreground = new SolidColorBrush(ColTextMuted); };
+            btnDeleteAcc.Click += (s, e) =>
+            {
+                e.Handled = true;
+                DeleteAccount(capturedId, capturedEmail);
+            };
+            userRight.Children.Add(btnDeleteAcc);
+            Grid.SetColumn(userRight, 1);
+            headerGrid.Children.Add(userRight);
+
+            cardStack.Children.Add(headerGrid);
+
+            // 2. Bottom Quota Section
+            if (isReauthNeeded)
+            {
+                Border reauthBox = new Border
+                {
+                    Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
+                    BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(80, 239, 68, 68)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12, 8, 12, 8)
+                };
+                Grid rGrid = new Grid();
+                rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                TextBlock rTitle = new TextBlock
+                {
+                    Text = "⚠️ 凭据已失效，请点击右侧重新授权",
+                    FontSize = 11,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(ColRed),
                     VerticalAlignment = VerticalAlignment.Center
                 };
-                userHeader.Children.Add(avatar);
+                Grid.SetColumn(rTitle, 0);
+                rGrid.Children.Add(rTitle);
 
-                StackPanel emailGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-                emailGroup.Children.Add(new TextBlock { Text = email, FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMain), MaxWidth = 140, TextTrimming = TextTrimming.CharacterEllipsis });
-                
-                if (isReauthNeeded)
-                {
-                    emailGroup.Children.Add(new TextBlock { Text = "● 凭据已失效 (需重登)", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColRed), Margin = new Thickness(0, 2, 0, 0) });
-                }
-                else if (health == "cooldown")
-                {
-                    emailGroup.Children.Add(new TextBlock { Text = "● 429 频控冷却中", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColAmber), Margin = new Thickness(0, 2, 0, 0) });
-                }
-                else if (health == "disabled")
-                {
-                    emailGroup.Children.Add(new TextBlock { Text = "● 账号已停用", FontSize = 9.5, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 2, 0, 0) });
-                }
-                else
-                {
-                    emailGroup.Children.Add(new TextBlock { Text = "● Google OAuth 就绪", FontSize = 9.5, Foreground = new SolidColorBrush(ColGreen), Margin = new Thickness(0, 2, 0, 0) });
-                }
-                
-                userHeader.Children.Add(emailGroup);
-                userLeft.Children.Add(userHeader);
+                Button btnReauth = CreateButton("🔑 重登", ColRed, System.Windows.Media.Brushes.White, 11, true);
+                btnReauth.Padding = new Thickness(10, 4, 10, 4);
+                btnReauth.Click += (s, e) => StartOAuthLogin();
+                Grid.SetColumn(btnReauth, 1);
+                rGrid.Children.Add(btnReauth);
 
-                // Routing Badges & Delete Button Row
-                StackPanel badgeRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) };
-
-                if (autoRoundRobin)
-                {
-                    Border pillAuto = new Border
-                    {
-                        Background = isReauthNeeded ? new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 239, 68, 68)) : new SolidColorBrush(ColPrimaryLight),
-                        CornerRadius = new CornerRadius(6),
-                        Padding = new Thickness(8, 3, 8, 3),
-                        HorizontalAlignment = HorizontalAlignment.Left
-                    };
-                    pillAuto.Child = new TextBlock
-                    {
-                        Text = isReauthNeeded ? "⚠️ 凭据已跳过轮询" : "● 自动轮询中 (点击指定此账号)",
-                        FontSize = 10,
-                        FontWeight = FontWeights.SemiBold,
-                        Foreground = isReauthNeeded ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColPrimary)
-                    };
-                    badgeRow.Children.Add(pillAuto);
-                }
-                else
-                {
-                    if (isThisAccountActive)
-                    {
-                        Border pillActive = new Border
-                        {
-                            Background = new SolidColorBrush(ColPrimaryLight),
-                            BorderBrush = new SolidColorBrush(ColPrimary),
-                            BorderThickness = new Thickness(1),
-                            CornerRadius = new CornerRadius(6),
-                            Padding = new Thickness(8, 3, 8, 3),
-                            HorizontalAlignment = HorizontalAlignment.Left
-                        };
-                        pillActive.Child = new TextBlock { Text = "⭐ 当前生效账号", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
-                        badgeRow.Children.Add(pillActive);
-                    }
-                    else
-                    {
-                        Border pillIdle = new Border
-                        {
-                            Background = new SolidColorBrush(ColCardMuted),
-                            BorderBrush = new SolidColorBrush(ColBorder),
-                            BorderThickness = new Thickness(1),
-                            CornerRadius = new CornerRadius(6),
-                            Padding = new Thickness(8, 3, 8, 3),
-                            HorizontalAlignment = HorizontalAlignment.Left
-                        };
-                        pillIdle.Child = new TextBlock { Text = "👉 点击切换为此账号", FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMuted) };
-                        badgeRow.Children.Add(pillIdle);
-                    }
-                }
-
-                Button btnDeleteAcc = new Button
-                {
-                    Content = "🗑️ 移除",
-                    FontSize = 10,
-                    Foreground = new SolidColorBrush(ColTextMuted),
-                    Background = System.Windows.Media.Brushes.Transparent,
-                    BorderThickness = new Thickness(0),
-                    Cursor = Cursors.Hand,
-                    Margin = new Thickness(8, 0, 0, 0),
-                    Padding = new Thickness(4, 2, 4, 2),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    ToolTip = "从本地移除此账号凭据"
-                };
-                btnDeleteAcc.MouseEnter += (s, e) => { btnDeleteAcc.Foreground = new SolidColorBrush(ColRed); };
-                btnDeleteAcc.MouseLeave += (s, e) => { btnDeleteAcc.Foreground = new SolidColorBrush(ColTextMuted); };
-                btnDeleteAcc.Click += (s, e) =>
-                {
-                    e.Handled = true;
-                    DeleteAccount(capturedId, capturedEmail);
-                };
-                badgeRow.Children.Add(btnDeleteAcc);
-
-                userLeft.Children.Add(badgeRow);
-
-                Grid.SetColumn(userLeft, 0);
-                cardGrid.Children.Add(userLeft);
-
-                // Right Area: If reauth is needed, show prompt; else show Quotas
-                if (isReauthNeeded)
-                {
-                    Border reauthBox = new Border
-                    {
-                        Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
-                        BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(80, 239, 68, 68)),
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(12),
-                        Padding = new Thickness(20, 14, 20, 14),
-                        Margin = new Thickness(12, 0, 0, 0)
-                    };
-                    Grid rGrid = new Grid();
-                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                    rGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-                    StackPanel rTextGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-                    TextBlock rTitle = new TextBlock
-                    {
-                        Text = "⚠️ Google OAuth 授权已失效或被撤销",
-                        FontSize = 13,
-                        FontWeight = FontWeights.Bold,
-                        Foreground = new SolidColorBrush(ColRed),
-                        Margin = new Thickness(0, 0, 0, 4)
-                    };
-                    TextBlock rSub = new TextBlock
-                    {
-                        Text = "上游服务返回 503 auth_unavailable。请点击右侧按钮重新登录此 Google 账号以刷新授权凭据并恢复正常调用。",
-                        FontSize = 11.5,
-                        Foreground = new SolidColorBrush(ColTextMuted),
-                        TextWrapping = TextWrapping.Wrap
-                    };
-                    rTextGroup.Children.Add(rTitle);
-                    rTextGroup.Children.Add(rSub);
-                    Grid.SetColumn(rTextGroup, 0);
-                    rGrid.Children.Add(rTextGroup);
-
-                    Button btnReauth = CreateButton("🔑 重新登录授权", ColRed, System.Windows.Media.Brushes.White, 12, true);
-                    btnReauth.Padding = new Thickness(16, 8, 16, 8);
-                    btnReauth.Margin = new Thickness(16, 0, 0, 0);
-                    btnReauth.Click += (s, e) => StartOAuthLogin();
-                    Grid.SetColumn(btnReauth, 1);
-                    rGrid.Children.Add(btnReauth);
-
-                    reauthBox.Child = rGrid;
-                    Grid.SetColumn(reauthBox, 1);
-                    cardGrid.Children.Add(reauthBox);
-                }
-                else
-                {
-                    // Right: Unified Quota Groups with separate 5-Hour and Weekly metrics
-                    var quota = acc.ContainsKey("quota") ? acc["quota"] as Dictionary<string, object> : null;
-                    var summary = quota != null && quota.ContainsKey("summary") ? quota["summary"] as Dictionary<string, object>
-                        : (quota != null && quota.ContainsKey("quota_summary") ? quota["quota_summary"] as Dictionary<string, object>
-                        : (quota != null && quota.ContainsKey("quotaSummary") ? quota["quotaSummary"] as Dictionary<string, object> : null));
-                    var qGroups = summary != null && summary.ContainsKey("groups") ? summary["groups"] as IEnumerable : null;
-                    var qModels = quota != null && quota.ContainsKey("models") ? quota["models"] as IEnumerable : null;
-
-                    int geminiFiveHour = 100;
-                    string geminiFiveHourReset = "5小时周期重置";
-                    int geminiWeekly = 100;
-                    string geminiWeeklyReset = "周度周期重置";
-
-                    int claudeFiveHour = 100;
-                    string claudeFiveHourReset = "5小时周期重置";
-                    int claudeWeekly = 100;
-                    string claudeWeeklyReset = "周度周期重置";
-
-                    bool parsedFromSummary = false;
-                    if (qGroups != null)
-                    {
-                        foreach (var gObj in qGroups)
-                        {
-                            var g = gObj as Dictionary<string, object>;
-                            if (g == null) continue;
-                            string gName = g.ContainsKey("displayName") ? g["displayName"].ToString() : "";
-                            var buckets = g.ContainsKey("buckets") ? g["buckets"] as IEnumerable : null;
-                            if (buckets == null) continue;
-
-                            parsedFromSummary = true;
-                            bool isGeminiGroup = gName.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0;
-                            bool isClaudeGroup = gName.IndexOf("Claude", StringComparison.OrdinalIgnoreCase) >= 0 || gName.IndexOf("3p", StringComparison.OrdinalIgnoreCase) >= 0;
-
-                            foreach (var bObj in buckets)
-                            {
-                                var b = bObj as Dictionary<string, object>;
-                                if (b == null) continue;
-                                string w = b.ContainsKey("window") ? b["window"].ToString() : (b.ContainsKey("bucketId") ? b["bucketId"].ToString() : "");
-                                double frac = 1.0;
-                                if (b.ContainsKey("remainingFraction") && b["remainingFraction"] != null)
-                                {
-                                    double.TryParse(b["remainingFraction"].ToString(), out frac);
-                                }
-                                string rawReset = b.ContainsKey("resetTime") && b["resetTime"] != null ? b["resetTime"].ToString() : "";
-                                string formattedReset = !string.IsNullOrEmpty(rawReset) ? FormatResetTime(rawReset) : "";
-
-                                if (isGeminiGroup)
-                                {
-                                    if (w.Contains("5h") || w.Contains("five"))
-                                    {
-                                        geminiFiveHour = (int)Math.Round(frac * 100);
-                                        if (!string.IsNullOrEmpty(formattedReset)) geminiFiveHourReset = formattedReset;
-                                    }
-                                    else if (w.Contains("week"))
-                                    {
-                                        geminiWeekly = (int)Math.Round(frac * 100);
-                                        if (!string.IsNullOrEmpty(formattedReset)) geminiWeeklyReset = formattedReset;
-                                    }
-                                }
-                                else if (isClaudeGroup)
-                                {
-                                    if (w.Contains("5h") || w.Contains("five"))
-                                    {
-                                        claudeFiveHour = (int)Math.Round(frac * 100);
-                                        if (!string.IsNullOrEmpty(formattedReset)) claudeFiveHourReset = formattedReset;
-                                    }
-                                    else if (w.Contains("week"))
-                                    {
-                                        claudeWeekly = (int)Math.Round(frac * 100);
-                                        if (!string.IsNullOrEmpty(formattedReset)) claudeWeeklyReset = formattedReset;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (!parsedFromSummary && qModels != null)
-                    {
-                        double minGeminiFiveHour = 1.0;
-                        double minGeminiWeekly = 1.0;
-                        bool hasGeminiFiveHourReset = false;
-                        bool hasGeminiWeeklyReset = false;
-
-                        double minClaudeFiveHour = 1.0;
-                        double minClaudeWeekly = 1.0;
-                        bool hasClaudeFiveHourReset = false;
-                        bool hasClaudeWeeklyReset = false;
-
-                        foreach (var mObj in qModels)
-                        {
-                            var m = mObj as Dictionary<string, object>;
-                            if (m == null) continue;
-                            string mId = m.ContainsKey("id") ? m["id"].ToString() : "";
-                            double frac = 1.0;
-                            if (m.ContainsKey("remainingFraction") && m["remainingFraction"] != null)
-                            {
-                                double.TryParse(m["remainingFraction"].ToString(), out frac);
-                            }
-                            string rawReset = m.ContainsKey("resetTime") && m["resetTime"] != null ? m["resetTime"].ToString() : "";
-
-                            bool isWeekly = false;
-                            double spanHours = 0.0;
-                            if (!string.IsNullOrEmpty(rawReset))
-                            {
-                                DateTime utc;
-                                if (DateTime.TryParse(rawReset, null, DateTimeStyles.AdjustToUniversal, out utc))
-                                {
-                                    TimeSpan span = utc - DateTime.UtcNow;
-                                    spanHours = span.TotalHours;
-                                    if (spanHours > 6.0)
-                                    {
-                                        isWeekly = true;
-                                    }
-                                }
-                            }
-                            if (mId.Contains("tiered") || mId.Contains("pro") || mId.Contains("weekly"))
-                            {
-                                isWeekly = true;
-                            }
-
-                            if (mId.StartsWith("gemini-"))
-                            {
-                                if (isWeekly)
-                                {
-                                    if (frac < minGeminiWeekly) minGeminiWeekly = frac;
-                                    if (!hasGeminiWeeklyReset && !string.IsNullOrEmpty(rawReset) && spanHours > 6.0)
-                                    {
-                                        geminiWeeklyReset = FormatResetTime(rawReset);
-                                        hasGeminiWeeklyReset = true;
-                                    }
-                                }
-                                else
-                                {
-                                    if (frac < minGeminiFiveHour) minGeminiFiveHour = frac;
-                                    if (!hasGeminiFiveHourReset && !string.IsNullOrEmpty(rawReset))
-                                    {
-                                        geminiFiveHourReset = FormatResetTime(rawReset);
-                                        hasGeminiFiveHourReset = true;
-                                    }
-                                }
-                            }
-                            else if (mId.StartsWith("claude-") || mId.StartsWith("gpt-"))
-                            {
-                                if (isWeekly)
-                                {
-                                    if (frac < minClaudeWeekly) minClaudeWeekly = frac;
-                                    if (!hasClaudeWeeklyReset && !string.IsNullOrEmpty(rawReset) && spanHours > 6.0)
-                                    {
-                                        claudeWeeklyReset = FormatResetTime(rawReset);
-                                        hasClaudeWeeklyReset = true;
-                                    }
-                                }
-                                else
-                                {
-                                    if (frac < minClaudeFiveHour) minClaudeFiveHour = frac;
-                                    if (!hasClaudeFiveHourReset && !string.IsNullOrEmpty(rawReset))
-                                    {
-                                        claudeFiveHourReset = FormatResetTime(rawReset);
-                                        hasClaudeFiveHourReset = true;
-                                    }
-                                }
-                            }
-                        }
-
-                        geminiFiveHour = (int)Math.Round(minGeminiFiveHour * 100);
-                        geminiWeekly = (int)Math.Round(minGeminiWeekly * 100);
-                        claudeFiveHour = (int)Math.Round(minClaudeFiveHour * 100);
-                        claudeWeekly = (int)Math.Round(minClaudeWeekly * 100);
-                    }
-
-                    Grid groupsGrid = new Grid { Margin = new Thickness(8, 0, 0, 0) };
-                    groupsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                    groupsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-                    UIElement geminiGroupCard = CreateUnifiedQuotaGroupCard("🔮 Gemini 模型系列", "统一共享 5小时与周度限额", geminiFiveHour, geminiFiveHourReset, geminiWeekly, geminiWeeklyReset);
-                    Grid.SetColumn((FrameworkElement)geminiGroupCard, 0);
-                    groupsGrid.Children.Add(geminiGroupCard);
-
-                    UIElement claudeGroupCard = CreateUnifiedQuotaGroupCard("⚡ Claude & GPT 模型系列", "统一共享 5小时与周度限额", claudeFiveHour, claudeFiveHourReset, claudeWeekly, claudeWeeklyReset);
-                    Grid.SetColumn((FrameworkElement)claudeGroupCard, 1);
-                    groupsGrid.Children.Add(claudeGroupCard);
-
-                    Grid.SetColumn(groupsGrid, 1);
-                    cardGrid.Children.Add(groupsGrid);
-                }
-
-                card.Child = cardGrid;
-                panelAccounts.Children.Add(card);
+                reauthBox.Child = rGrid;
+                cardStack.Children.Add(reauthBox);
             }
+            else
+            {
+                var quota = acc.ContainsKey("quota") ? acc["quota"] as Dictionary<string, object> : null;
+                var summary = quota != null && quota.ContainsKey("summary") ? quota["summary"] as Dictionary<string, object>
+                    : (quota != null && quota.ContainsKey("quota_summary") ? quota["quota_summary"] as Dictionary<string, object>
+                    : (quota != null && quota.ContainsKey("quotaSummary") ? quota["quotaSummary"] as Dictionary<string, object> : null));
+                var qGroups = summary != null && summary.ContainsKey("groups") ? summary["groups"] as IEnumerable : null;
+                var qModels = quota != null && quota.ContainsKey("models") ? quota["models"] as IEnumerable : null;
+
+                int geminiFiveHour = 100;
+                string geminiFiveHourReset = "5小时周期重置";
+                int geminiWeekly = 100;
+                string geminiWeeklyReset = "周度周期重置";
+
+                int claudeFiveHour = 100;
+                string claudeFiveHourReset = "5小时周期重置";
+                int claudeWeekly = 100;
+                string claudeWeeklyReset = "周度周期重置";
+
+                bool parsedFromSummary = false;
+                if (qGroups != null)
+                {
+                    foreach (var gObj in qGroups)
+                    {
+                        var g = gObj as Dictionary<string, object>;
+                        if (g == null) continue;
+                        string gName = g.ContainsKey("displayName") ? g["displayName"].ToString() : "";
+                        var buckets = g.ContainsKey("buckets") ? g["buckets"] as IEnumerable : null;
+                        if (buckets == null) continue;
+
+                        parsedFromSummary = true;
+                        bool isGeminiGroup = gName.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0;
+                        bool isClaudeGroup = gName.IndexOf("Claude", StringComparison.OrdinalIgnoreCase) >= 0 || gName.IndexOf("3p", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                        foreach (var bObj in buckets)
+                        {
+                            var b = bObj as Dictionary<string, object>;
+                            if (b == null) continue;
+                            string w = b.ContainsKey("window") ? b["window"].ToString() : (b.ContainsKey("bucketId") ? b["bucketId"].ToString() : "");
+                            double frac = 1.0;
+                            if (b.ContainsKey("remainingFraction") && b["remainingFraction"] != null)
+                            {
+                                double.TryParse(b["remainingFraction"].ToString(), out frac);
+                            }
+                            string rawReset = b.ContainsKey("resetTime") && b["resetTime"] != null ? b["resetTime"].ToString() : "";
+                            string formattedReset = !string.IsNullOrEmpty(rawReset) ? FormatResetTime(rawReset) : "";
+
+                            if (isGeminiGroup)
+                            {
+                                if (w.Contains("5h") || w.Contains("five"))
+                                {
+                                    geminiFiveHour = (int)Math.Round(frac * 100);
+                                    if (!string.IsNullOrEmpty(formattedReset)) geminiFiveHourReset = formattedReset;
+                                }
+                                else if (w.Contains("week"))
+                                {
+                                    geminiWeekly = (int)Math.Round(frac * 100);
+                                    if (!string.IsNullOrEmpty(formattedReset)) geminiWeeklyReset = formattedReset;
+                                }
+                            }
+                            else if (isClaudeGroup)
+                            {
+                                if (w.Contains("5h") || w.Contains("five"))
+                                {
+                                    claudeFiveHour = (int)Math.Round(frac * 100);
+                                    if (!string.IsNullOrEmpty(formattedReset)) claudeFiveHourReset = formattedReset;
+                                }
+                                else if (w.Contains("week"))
+                                {
+                                    claudeWeekly = (int)Math.Round(frac * 100);
+                                    if (!string.IsNullOrEmpty(formattedReset)) claudeWeeklyReset = formattedReset;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!parsedFromSummary && qModels != null)
+                {
+                    double minGeminiFiveHour = 1.0;
+                    double minGeminiWeekly = 1.0;
+                    bool hasGeminiFiveHourReset = false;
+                    bool hasGeminiWeeklyReset = false;
+
+                    double minClaudeFiveHour = 1.0;
+                    double minClaudeWeekly = 1.0;
+                    bool hasClaudeFiveHourReset = false;
+                    bool hasClaudeWeeklyReset = false;
+
+                    foreach (var mObj in qModels)
+                    {
+                        var m = mObj as Dictionary<string, object>;
+                        if (m == null) continue;
+                        string mId = m.ContainsKey("id") ? m["id"].ToString() : "";
+                        double frac = 1.0;
+                        if (m.ContainsKey("remainingFraction") && m["remainingFraction"] != null)
+                        {
+                            double.TryParse(m["remainingFraction"].ToString(), out frac);
+                        }
+                        string rawReset = m.ContainsKey("resetTime") && m["resetTime"] != null ? m["resetTime"].ToString() : "";
+
+                        bool isWeekly = false;
+                        double spanHours = 0.0;
+                        if (!string.IsNullOrEmpty(rawReset))
+                        {
+                            DateTime utc;
+                            if (DateTime.TryParse(rawReset, null, DateTimeStyles.AdjustToUniversal, out utc))
+                            {
+                                TimeSpan span = utc - DateTime.UtcNow;
+                                spanHours = span.TotalHours;
+                                if (spanHours > 6.0) isWeekly = true;
+                            }
+                        }
+                        if (mId.Contains("tiered") || mId.Contains("pro") || mId.Contains("weekly")) isWeekly = true;
+
+                        if (mId.StartsWith("gemini-"))
+                        {
+                            if (isWeekly)
+                            {
+                                if (frac < minGeminiWeekly) minGeminiWeekly = frac;
+                                if (!hasGeminiWeeklyReset && !string.IsNullOrEmpty(rawReset) && spanHours > 6.0)
+                                {
+                                    geminiWeeklyReset = FormatResetTime(rawReset);
+                                    hasGeminiWeeklyReset = true;
+                                }
+                            }
+                            else
+                            {
+                                if (frac < minGeminiFiveHour) minGeminiFiveHour = frac;
+                                if (!hasGeminiFiveHourReset && !string.IsNullOrEmpty(rawReset))
+                                {
+                                    geminiFiveHourReset = FormatResetTime(rawReset);
+                                    hasGeminiFiveHourReset = true;
+                                }
+                            }
+                        }
+                        else if (mId.StartsWith("claude-") || mId.StartsWith("gpt-"))
+                        {
+                            if (isWeekly)
+                            {
+                                if (frac < minClaudeWeekly) minClaudeWeekly = frac;
+                                if (!hasClaudeWeeklyReset && !string.IsNullOrEmpty(rawReset) && spanHours > 6.0)
+                                {
+                                    claudeWeeklyReset = FormatResetTime(rawReset);
+                                    hasClaudeWeeklyReset = true;
+                                }
+                            }
+                            else
+                            {
+                                if (frac < minClaudeFiveHour) minClaudeFiveHour = frac;
+                                if (!hasClaudeFiveHourReset && !string.IsNullOrEmpty(rawReset))
+                                {
+                                    claudeFiveHourReset = FormatResetTime(rawReset);
+                                    hasClaudeFiveHourReset = true;
+                                }
+                            }
+                        }
+                    }
+
+                    geminiFiveHour = (int)Math.Round(minGeminiFiveHour * 100);
+                    geminiWeekly = (int)Math.Round(minGeminiWeekly * 100);
+                    claudeFiveHour = (int)Math.Round(minClaudeFiveHour * 100);
+                    claudeWeekly = (int)Math.Round(minClaudeWeekly * 100);
+                }
+
+                Grid groupsGrid = new Grid();
+                groupsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                groupsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                UIElement geminiGroupCard = CreateUnifiedQuotaGroupCard("🔮 Gemini 模型", "5小时/周度限额", geminiFiveHour, geminiFiveHourReset, geminiWeekly, geminiWeeklyReset, false);
+                Grid.SetColumn((FrameworkElement)geminiGroupCard, 0);
+                groupsGrid.Children.Add(geminiGroupCard);
+
+                UIElement claudeGroupCard = CreateUnifiedQuotaGroupCard("⚡ Claude & GPT", "3P模型独立池", claudeFiveHour, claudeFiveHourReset, claudeWeekly, claudeWeeklyReset, true);
+                Grid.SetColumn((FrameworkElement)claudeGroupCard, 1);
+                groupsGrid.Children.Add(claudeGroupCard);
+
+                cardStack.Children.Add(groupsGrid);
+            }
+
+            card.Child = cardStack;
+            return card;
         }
 
         private string FormatResetTime(string rawUtc)
@@ -1992,23 +1997,23 @@ namespace AntigravityDesktopClient
             return rawUtc;
         }
 
-        private UIElement CreateUnifiedQuotaGroupCard(string title, string subtitle, int fiveHourPercent, string fiveHourReset, int weeklyPercent, string weeklyReset)
+        private UIElement CreateUnifiedQuotaGroupCard(string title, string subtitle, int fiveHourPercent, string fiveHourReset, int weeklyPercent, string weeklyReset, bool isRight = false)
         {
             Border groupBorder = new Border
             {
                 Background = new SolidColorBrush(ColCardMuted),
                 BorderBrush = new SolidColorBrush(ColBorder),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(10, 8, 10, 8),
-                Margin = new Thickness(4, 0, 4, 0)
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(isRight ? 3 : 0, 0, isRight ? 0 : 3, 0)
             };
             StackPanel sp = new StackPanel();
 
             // Header
-            StackPanel header = new StackPanel { Margin = new Thickness(0, 0, 0, 6) };
-            header.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, FontSize = 12, Foreground = new SolidColorBrush(ColTextMain) });
-            header.Children.Add(new TextBlock { Text = subtitle, FontSize = 9, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
+            StackPanel header = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
+            header.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.Bold, FontSize = 11, Foreground = new SolidColorBrush(ColTextMain) });
+            header.Children.Add(new TextBlock { Text = subtitle, FontSize = 8.5, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
             sp.Children.Add(header);
 
             // Row 1: 5-Hour Limit
@@ -2029,22 +2034,22 @@ namespace AntigravityDesktopClient
                 BorderBrush = new SolidColorBrush(ColBorder),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(8, 4, 8, 4),
-                Margin = new Thickness(0, 0, 0, isWeekly ? 0 : 4)
+                Padding = new Thickness(6, 3, 6, 3),
+                Margin = new Thickness(0, 0, 0, isWeekly ? 0 : 3)
             };
             Grid grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             // Circular Ring
-            Grid circleGrid = new Grid { Width = 22, Height = 22, VerticalAlignment = VerticalAlignment.Center };
+            Grid circleGrid = new Grid { Width = 20, Height = 20, VerticalAlignment = VerticalAlignment.Center };
             System.Windows.Shapes.Ellipse bgCircle = new System.Windows.Shapes.Ellipse
             {
-                Width = 22,
-                Height = 22,
+                Width = 20,
+                Height = 20,
                 Stroke = new SolidColorBrush(ColBorder),
-                StrokeThickness = 2.5
+                StrokeThickness = 2.2
             };
             circleGrid.Children.Add(bgCircle);
 
@@ -2053,18 +2058,18 @@ namespace AntigravityDesktopClient
             System.Windows.Shapes.Path progressPath = new System.Windows.Shapes.Path
             {
                 Stroke = new SolidColorBrush(ringColor),
-                StrokeThickness = 2.5,
+                StrokeThickness = 2.2,
                 StrokeEndLineCap = PenLineCap.Round,
-                Data = CreateArcGeometry(11, 11, 9.5, 0, (percent / 100.0) * 359.9)
+                Data = CreateArcGeometry(10, 10, 8.5, 0, (percent / 100.0) * 359.9)
             };
             circleGrid.Children.Add(progressPath);
             Grid.SetColumn(circleGrid, 0);
             grid.Children.Add(circleGrid);
 
             // Center Text Info
-            StackPanel textGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
-            textGroup.Children.Add(new TextBlock { Text = label, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain) });
-            textGroup.Children.Add(new TextBlock { Text = resetInfo, FontSize = 9, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
+            StackPanel textGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 0, 0) };
+            textGroup.Children.Add(new TextBlock { Text = label, FontSize = 10, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain) });
+            textGroup.Children.Add(new TextBlock { Text = resetInfo, FontSize = 8.5, Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 1, 0, 0) });
             Grid.SetColumn(textGroup, 1);
             grid.Children.Add(textGroup);
 
@@ -2073,11 +2078,11 @@ namespace AntigravityDesktopClient
             {
                 Text = percent + "%",
                 FontFamily = new System.Windows.Media.FontFamily("Consolas"),
-                FontSize = 12.5,
+                FontSize = 11.5,
                 FontWeight = FontWeights.Bold,
                 Foreground = new SolidColorBrush(ringColor),
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 2, 0)
+                Margin = new Thickness(4, 0, 2, 0)
             };
             Grid.SetColumn(txtPercent, 2);
             grid.Children.Add(txtPercent);

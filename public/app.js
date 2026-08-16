@@ -135,17 +135,19 @@ function renderAccounts(accounts) {
     const initial = (account.email || account.name || "A").slice(0, 1).toUpperCase();
     return `<article class="account-card">
       <div class="account-main">
-        <div class="account-id">
-          <span class="avatar">${escapeHtml(initial)}</span>
-          <div><strong>${escapeHtml(account.email || account.name)}</strong><span>${escapeHtml(account.label || account.name)}</span></div>
+        <div class="account-header-row">
+          <div class="account-id">
+            <span class="avatar">${escapeHtml(initial)}</span>
+            <div><strong>${escapeHtml(account.email || account.name)}</strong></div>
+            <div class="health-line" style="margin: 0 0 0 6px;"><span class="health-dot ${health.tone}"></span><b>${escapeHtml(health.label)}</b></div>
+          </div>
+          <div class="account-actions">
+            <button class="button ghost" style="padding: 4px 8px; font-size: 11px;" data-account-toggle="${escapeHtml(account.name)}" data-disabled="${account.disabled}">${account.disabled ? "启用" : "停用"}</button>
+            <button class="button danger" style="padding: 4px 8px; font-size: 11px;" data-account-delete="${escapeHtml(account.name)}">删除</button>
+          </div>
         </div>
         <div>
-          <div class="health-line"><span class="health-dot ${health.tone}"></span><b>${escapeHtml(health.label)}</b><span>成功 ${account.success} / 失败 ${account.failed}</span></div>
           ${quotaHtml(account)}
-        </div>
-        <div class="account-actions">
-          <button class="button ghost" data-account-toggle="${escapeHtml(account.name)}" data-disabled="${account.disabled}">${account.disabled ? "启用" : "停用"}</button>
-          <button class="button danger" data-account-delete="${escapeHtml(account.name)}">删除</button>
         </div>
       </div>
       <div class="quota-meta"><span>额度更新：${escapeHtml(timeText(account.quota?.fetchedAt))}</span><span>令牌刷新：${escapeHtml(timeText(account.lastRefresh))}</span></div>
