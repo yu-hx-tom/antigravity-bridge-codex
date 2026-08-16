@@ -946,15 +946,15 @@ namespace AntigravityDesktopClient
             {
                 ProcessStartInfo psi = new ProcessStartInfo
                 {
-                    FileName = "cmd.exe",
-                    Arguments = "/c wmic process where \"name='node.exe' and commandline like '%server.mjs%'\" call terminate",
+                    FileName = "powershell.exe",
+                    Arguments = "-NoProfile -Command \"Get-WmiObject Win32_Process -Filter \\\"Name='node.exe'\\\" | Where-Object { $_.CommandLine -like '*server.mjs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\"",
                     CreateNoWindow = true,
                     UseShellExecute = false,
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
                 using (Process p = Process.Start(psi))
                 {
-                    p.WaitForExit(1000);
+                    p.WaitForExit(1500);
                 }
             }
             catch { }
@@ -1515,8 +1515,8 @@ namespace AntigravityDesktopClient
                     var summary = quota != null && quota.ContainsKey("summary") ? quota["summary"] as Dictionary<string, object>
                         : (quota != null && quota.ContainsKey("quota_summary") ? quota["quota_summary"] as Dictionary<string, object>
                         : (quota != null && quota.ContainsKey("quotaSummary") ? quota["quotaSummary"] as Dictionary<string, object> : null));
-                    var qGroups = summary != null && summary.ContainsKey("groups") ? summary["groups"] as ArrayList : null;
-                    var qModels = quota != null && quota.ContainsKey("models") ? quota["models"] as ArrayList : null;
+                    var qGroups = summary != null && summary.ContainsKey("groups") ? summary["groups"] as IEnumerable : null;
+                    var qModels = quota != null && quota.ContainsKey("models") ? quota["models"] as IEnumerable : null;
 
                     int geminiFiveHour = 100;
                     string geminiFiveHourReset = "5小时周期重置";
@@ -1528,16 +1528,18 @@ namespace AntigravityDesktopClient
                     int claudeWeekly = 100;
                     string claudeWeeklyReset = "周度周期重置";
 
-                    if (qGroups != null && qGroups.Count > 0)
+                    bool parsedFromSummary = false;
+                    if (qGroups != null)
                     {
                         foreach (var gObj in qGroups)
                         {
                             var g = gObj as Dictionary<string, object>;
                             if (g == null) continue;
                             string gName = g.ContainsKey("displayName") ? g["displayName"].ToString() : "";
-                            var buckets = g.ContainsKey("buckets") ? g["buckets"] as ArrayList : null;
+                            var buckets = g.ContainsKey("buckets") ? g["buckets"] as IEnumerable : null;
                             if (buckets == null) continue;
 
+                            parsedFromSummary = true;
                             bool isGeminiGroup = gName.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0;
                             bool isClaudeGroup = gName.IndexOf("Claude", StringComparison.OrdinalIgnoreCase) >= 0 || gName.IndexOf("3p", StringComparison.OrdinalIgnoreCase) >= 0;
 
@@ -1583,7 +1585,8 @@ namespace AntigravityDesktopClient
                             }
                         }
                     }
-                    else if (qModels != null)
+
+                    if (!parsedFromSummary && qModels != null)
                     {
                         double minGeminiFiveHour = 1.0;
                         double minGeminiWeekly = 1.0;
