@@ -728,44 +728,57 @@ async function refreshQuota(authIndex = "") {
   runtime.quotaRefreshing = true;
   try {
     const accounts = (await getAccounts(true)).filter((account) => !authIndex || account.authIndex === authIndex);
-    const endpoints = [
-      "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
+    const summaryEndpoints = [
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+      "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+      "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    ];
+    const modelEndpoints = [
       "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
       "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+      "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
     ];
+
     for (const account of accounts) {
       const projectId = await resolveProjectId(account);
       if (runtime.quotas[account.authIndex]?.status === "reauth") {
         continue;
       }
 
-      let lastResult = null;
-      let lastError = null;
-      for (const endpoint of endpoints) {
+      let summaryResult = null;
+      let summaryError = null;
+      for (const endpoint of summaryEndpoints) {
         try {
           const result = await antigravityApiCall(account, endpoint, projectId ? { project: projectId } : {});
-          lastResult = result;
+          summaryResult = result;
           if (result.status === 200) break;
           if (![404, 429, 500, 502, 503, 504].includes(result.status)) break;
         } catch (error) {
-          lastError = error;
+          summaryError = error;
         }
       }
-      const fetchedAt = new Date().toISOString();
-      if (lastResult?.status === 200) {
-        const models = parseQuotaPayload(lastResult.body);
-        let summary = lastResult.body?.quota_summary || lastResult.body?.quotaSummary || getAntigravityCockpitQuotaSummary(account.email) || null;
 
-        if (summary && models.length > 0) {
-          const live5h = models.find((m) => m.id.startsWith("gemini-") && m.remainingFraction !== null);
-          if (live5h && summary.groups?.[0]?.buckets) {
-            const b5h = summary.groups[0].buckets.find((b) => b.window === "5h" || b.bucketId === "gemini-5h");
-            if (b5h) {
-              b5h.remainingFraction = live5h.remainingFraction;
-              if (live5h.resetTime) b5h.resetTime = live5h.resetTime;
-            }
-          }
+      let modelsResult = null;
+      let modelsError = null;
+      for (const endpoint of modelEndpoints) {
+        try {
+          const result = await antigravityApiCall(account, endpoint, projectId ? { project: projectId } : {});
+          modelsResult = result;
+          if (result.status === 200) break;
+          if (![404, 429, 500, 502, 503, 504].includes(result.status)) break;
+        } catch (error) {
+          modelsError = error;
         }
+      }
+
+      const fetchedAt = new Date().toISOString();
+      const isSuccess = (summaryResult?.status === 200) || (modelsResult?.status === 200);
+
+      if (isSuccess) {
+        const models = modelsResult?.status === 200 ? parseQuotaPayload(modelsResult.body) : [];
+        let summary = (summaryResult?.status === 200 && summaryResult.body?.groups)
+          ? summaryResult.body
+          : (modelsResult?.body?.quota_summary || modelsResult?.body?.quotaSummary || getAntigravityCockpitQuotaSummary(account.email) || null);
 
         runtime.quotas[account.authIndex] = {
           status: "reported",
@@ -774,18 +787,18 @@ async function refreshQuota(authIndex = "") {
           models,
           summary,
           message: projectId
-            ? "额度来自带项目标识的 fetchAvailableModels 上游报告值"
+            ? "额度来自 Antigravity 官方实时 retrieveUserQuotaSummary 报告值"
             : "未解析到项目标识，当前额度可能不准确",
         };
       } else {
-        const status = lastResult?.status || 0;
+        const status = summaryResult?.status || modelsResult?.status || 0;
         runtime.quotas[account.authIndex] = {
           status: status === 401 || status === 403 ? "reauth" : status === 429 ? "cooldown" : "error",
           fetchedAt,
           projectId,
           models: [],
           summary: null,
-          message: lastError?.message || lastResult?.body?.error?.message || `上游返回 HTTP ${status || "未知"}`,
+          message: summaryError?.message || modelsError?.message || summaryResult?.body?.error?.message || modelsResult?.body?.error?.message || `上游返回 HTTP ${status || "未知"}`,
         };
       }
     }
