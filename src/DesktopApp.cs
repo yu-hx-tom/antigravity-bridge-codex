@@ -229,6 +229,227 @@ namespace AntigravityDesktopClient
         }
     }
 
+    public class FloatingHudWindow : Window
+    {
+        private Border pillBorder;
+        private TextBlock txtTps;
+        private TextBlock txtTtft;
+        private bool isDockedLeft = false;
+        private bool isDockedRight = false;
+
+        public Action OpenMainWindowAction;
+        public Action OpenSettingsAction;
+        public Action CloseHudAction;
+        public Action<double, double> PositionChangedAction;
+
+        public FloatingHudWindow()
+        {
+            WindowStyle = WindowStyle.None;
+            AllowsTransparency = true;
+            Background = System.Windows.Media.Brushes.Transparent;
+            Topmost = true;
+            ShowInTaskbar = false;
+            Width = 196;
+            Height = 36;
+            UseLayoutRounding = true;
+            SnapsToDevicePixels = true;
+            TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
+            TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
+            FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI, sans-serif");
+
+            pillBorder = new Border
+            {
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(235, 15, 23, 42)),
+                BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(190, 56, 189, 248)),
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(18),
+                Padding = new Thickness(12, 0, 12, 0),
+                Cursor = Cursors.SizeAll,
+                Effect = new DropShadowEffect
+                {
+                    Color = System.Windows.Media.Color.FromRgb(0, 0, 0),
+                    BlurRadius = 16,
+                    Opacity = 0.45,
+                    ShadowDepth = 2
+                }
+            };
+
+            Grid grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            // TPS Column
+            StackPanel spTps = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+            spTps.Children.Add(new TextBlock { Text = "⚡", FontSize = 11, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            txtTps = new TextBlock
+            {
+                Text = "-- t/s",
+                FontSize = 11.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spTps.Children.Add(txtTps);
+            Grid.SetColumn(spTps, 0);
+            grid.Children.Add(spTps);
+
+            // Divider
+            TextBlock divider = new TextBlock
+            {
+                Text = "|",
+                FontSize = 10,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromArgb(120, 71, 85, 105)),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 4, 0)
+            };
+            Grid.SetColumn(divider, 1);
+            grid.Children.Add(divider);
+
+            // TTFT Column
+            StackPanel spTtft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+            spTtft.Children.Add(new TextBlock { Text = "⏱️", FontSize = 10, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center });
+            txtTtft = new TextBlock
+            {
+                Text = "-- ms",
+                FontSize = 11.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            spTtft.Children.Add(txtTtft);
+            Grid.SetColumn(spTtft, 2);
+            grid.Children.Add(spTtft);
+
+            pillBorder.Child = grid;
+            Content = pillBorder;
+
+            // Events
+            MouseLeftButtonDown += (s, e) =>
+            {
+                if (e.ButtonState == MouseButtonState.Pressed)
+                {
+                    try { DragMove(); } catch { }
+                    CheckDocking();
+                    if (PositionChangedAction != null) PositionChangedAction(Left, Top);
+                }
+            };
+
+            MouseDoubleClick += (s, e) =>
+            {
+                if (OpenMainWindowAction != null) OpenMainWindowAction();
+            };
+
+            MouseEnter += (s, e) =>
+            {
+                if (isDockedLeft)
+                {
+                    AnimateLeft(0);
+                }
+                else if (isDockedRight)
+                {
+                    AnimateLeft(SystemParameters.PrimaryScreenWidth - Width);
+                }
+                AnimateOpacity(1.0);
+            };
+
+            MouseLeave += (s, e) =>
+            {
+                if (isDockedLeft)
+                {
+                    AnimateLeft(-(Width - 16));
+                    AnimateOpacity(0.65);
+                }
+                else if (isDockedRight)
+                {
+                    AnimateLeft(SystemParameters.PrimaryScreenWidth - 16);
+                    AnimateOpacity(0.65);
+                }
+            };
+
+            // Context Menu
+            System.Windows.Controls.ContextMenu cm = new System.Windows.Controls.ContextMenu();
+            System.Windows.Controls.MenuItem miOpen = new System.Windows.Controls.MenuItem { Header = "🌟 打开主界面" };
+            miOpen.Click += (s, e) => { if (OpenMainWindowAction != null) OpenMainWindowAction(); };
+            cm.Items.Add(miOpen);
+
+            System.Windows.Controls.MenuItem miSet = new System.Windows.Controls.MenuItem { Header = "⚙️ 偏好设置" };
+            miSet.Click += (s, e) => { if (OpenSettingsAction != null) OpenSettingsAction(); };
+            cm.Items.Add(miSet);
+
+            cm.Items.Add(new System.Windows.Controls.Separator());
+
+            System.Windows.Controls.MenuItem miClose = new System.Windows.Controls.MenuItem { Header = "✕ 关闭悬浮窗" };
+            miClose.Click += (s, e) => { if (CloseHudAction != null) CloseHudAction(); };
+            cm.Items.Add(miClose);
+
+            ContextMenu = cm;
+        }
+
+        public void CheckDocking()
+        {
+            double screenW = SystemParameters.PrimaryScreenWidth;
+            if (Left <= 25)
+            {
+                isDockedLeft = true;
+                isDockedRight = false;
+                Left = 0;
+            }
+            else if (Left + Width >= screenW - 25)
+            {
+                isDockedLeft = false;
+                isDockedRight = true;
+                Left = screenW - Width;
+            }
+            else
+            {
+                isDockedLeft = false;
+                isDockedRight = false;
+            }
+        }
+
+        private void AnimateLeft(double targetLeft)
+        {
+            var anim = new System.Windows.Media.Animation.DoubleAnimation(Left, targetLeft, TimeSpan.FromMilliseconds(180));
+            anim.DecelerationRatio = 0.8;
+            BeginAnimation(Window.LeftProperty, anim);
+        }
+
+        private void AnimateOpacity(double targetOpacity)
+        {
+            var anim = new System.Windows.Media.Animation.DoubleAnimation(Opacity, targetOpacity, TimeSpan.FromMilliseconds(180));
+            BeginAnimation(Window.OpacityProperty, anim);
+        }
+
+        public void UpdateTelemetry(double tps, int ttft)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (tps > 0)
+                {
+                    txtTps.Text = string.Format("{0:0.0} t/s", tps);
+                    txtTps.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(56, 189, 248));
+                }
+                else
+                {
+                    txtTps.Text = "-- t/s";
+                    txtTps.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184));
+                }
+
+                if (ttft > 0)
+                {
+                    txtTtft.Text = string.Format("{0} ms", ttft);
+                    txtTtft.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(52, 211, 153));
+                }
+                else
+                {
+                    txtTtft.Text = "-- ms";
+                    txtTtft.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184));
+                }
+            });
+        }
+    }
+
     public class MainWindow : Window
     {
         private Process nodeProcess;
@@ -270,12 +491,20 @@ namespace AntigravityDesktopClient
         private Border settingsOverlay;
         private CheckBox chkSettingsAutoStart;
         private CheckBox chkSettingsStartMinimized;
+        private CheckBox chkSettingsFloatingHud;
         private RadioButton rbSettingsCloseTray;
         private RadioButton rbSettingsCloseExit;
         private TextBox txtSettingsPort;
         private TextBox txtSettingsCodexPath;
         private System.Windows.Forms.ToolStripMenuItem trayModelsMenu;
+        private System.Windows.Forms.ToolStripMenuItem trayHudMenu;
         private System.Windows.Forms.ContextMenuStrip trayContextMenu;
+
+        // Floating HUD State
+        private FloatingHudWindow floatingHud;
+        private bool showFloatingHud = false;
+        private double floatingHudX = -1;
+        private double floatingHudY = -1;
 
         private bool autoStartBoot = false;
         private bool startMinimized = false;
@@ -340,6 +569,11 @@ namespace AntigravityDesktopClient
             refreshTimer.Interval = TimeSpan.FromSeconds(2.5);
             refreshTimer.Tick += (s, e) => FetchDashboardData();
             refreshTimer.Start();
+
+            if (showFloatingHud)
+            {
+                ToggleFloatingHud(true);
+            }
 
             if (isSilentStart)
             {
@@ -492,6 +726,9 @@ namespace AntigravityDesktopClient
             trayModelsMenu.DropDown.Padding = new System.Windows.Forms.Padding(2, 3, 2, 3);
             trayModelsMenu.DropDownItems.Add(new System.Windows.Forms.ToolStripMenuItem("正在同步模型列表...", null, (s, e) => { }));
             trayContextMenu.Items.Add(trayModelsMenu);
+
+            trayHudMenu = new System.Windows.Forms.ToolStripMenuItem((showFloatingHud ? "✓ " : "    ") + "桌面测速悬浮窗", null, (s, e) => ToggleFloatingHud(!showFloatingHud)) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) };
+            trayContextMenu.Items.Add(trayHudMenu);
 
             trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("⚙️ 偏好设置", null, (s, e) => { ShowAndActivate(); OpenSettingsModal(); }) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
             trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
@@ -1022,6 +1259,18 @@ namespace AntigravityDesktopClient
             rbSp.Children.Add(rbSettingsCloseExit);
             modalSp.Children.Add(rbSp);
 
+            chkSettingsFloatingHud = new CheckBox
+            {
+                Content = " 开启桌面实时测速悬浮窗 (实时监测 Token/s 与首字延迟)",
+                IsChecked = showFloatingHud,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(ColTextMain),
+                Margin = new Thickness(4, 0, 0, 14),
+                Cursor = Cursors.Hand
+            };
+            modalSp.Children.Add(chkSettingsFloatingHud);
+
             // Group 2: Network & Proxy Port
             modalSp.Children.Add(new TextBlock { Text = "🌐 网络与端口", FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(0, 6, 0, 8) });
             Grid portGrid = new Grid { Margin = new Thickness(4, 0, 0, 12) };
@@ -1286,6 +1535,18 @@ namespace AntigravityDesktopClient
                         {
                             startMinimized = Convert.ToBoolean(dict["startMinimized"]);
                         }
+                        if (dict.ContainsKey("showFloatingHud"))
+                        {
+                            showFloatingHud = Convert.ToBoolean(dict["showFloatingHud"]);
+                        }
+                        if (dict.ContainsKey("floatingHudX"))
+                        {
+                            double.TryParse(dict["floatingHudX"].ToString(), out floatingHudX);
+                        }
+                        if (dict.ContainsKey("floatingHudY"))
+                        {
+                            double.TryParse(dict["floatingHudY"].ToString(), out floatingHudY);
+                        }
                     }
                 }
             }
@@ -1309,6 +1570,9 @@ namespace AntigravityDesktopClient
                 dict["closeAction"] = closeAction;
                 dict["proxyPort"] = proxyPort;
                 dict["customCodexPath"] = customCodexPath;
+                dict["showFloatingHud"] = showFloatingHud;
+                dict["floatingHudX"] = (floatingHud != null) ? floatingHud.Left : floatingHudX;
+                dict["floatingHudY"] = (floatingHud != null) ? floatingHud.Top : floatingHudY;
                 dict["savedAt"] = DateTime.UtcNow.ToString("o");
                 string json = jsonSerializer.Serialize(dict);
                 File.WriteAllText(path, json, Encoding.UTF8);
@@ -1333,6 +1597,7 @@ namespace AntigravityDesktopClient
                 chkSettingsStartMinimized.IsChecked = startMinimized;
                 chkSettingsStartMinimized.IsEnabled = autoStartBoot;
             }
+            if (chkSettingsFloatingHud != null) chkSettingsFloatingHud.IsChecked = showFloatingHud;
             if (rbSettingsCloseTray != null) rbSettingsCloseTray.IsChecked = (closeAction != "exit");
             if (rbSettingsCloseExit != null) rbSettingsCloseExit.IsChecked = (closeAction == "exit");
             if (txtSettingsPort != null) txtSettingsPort.Text = proxyPort.ToString();
@@ -1361,6 +1626,12 @@ namespace AntigravityDesktopClient
             autoStartBoot = chkSettingsAutoStart != null && chkSettingsAutoStart.IsChecked == true;
             startMinimized = chkSettingsStartMinimized != null && chkSettingsStartMinimized.IsChecked == true;
             closeAction = (rbSettingsCloseExit != null && rbSettingsCloseExit.IsChecked == true) ? "exit" : "tray";
+
+            bool newFloatingHud = chkSettingsFloatingHud != null && chkSettingsFloatingHud.IsChecked == true;
+            if (newFloatingHud != showFloatingHud)
+            {
+                ToggleFloatingHud(newFloatingHud);
+            }
 
             if (txtSettingsPort != null)
             {
@@ -1396,6 +1667,52 @@ namespace AntigravityDesktopClient
 
             CloseSettingsModal();
             ShowToast("⚙️ 偏好设置已成功保存");
+        }
+
+        private void ToggleFloatingHud(bool show)
+        {
+            showFloatingHud = show;
+            if (showFloatingHud)
+            {
+                if (floatingHud == null)
+                {
+                    floatingHud = new FloatingHudWindow();
+                    floatingHud.OpenMainWindowAction = () => ShowAndActivate();
+                    floatingHud.OpenSettingsAction = () => { ShowAndActivate(); OpenSettingsModal(); };
+                    floatingHud.CloseHudAction = () => ToggleFloatingHud(false);
+                    floatingHud.PositionChangedAction = (x, y) =>
+                    {
+                        floatingHudX = x;
+                        floatingHudY = y;
+                        SaveUiPreferences();
+                    };
+
+                    if (floatingHudX >= 0 && floatingHudY >= 0)
+                    {
+                        floatingHud.Left = floatingHudX;
+                        floatingHud.Top = floatingHudY;
+                    }
+                    else
+                    {
+                        // Default position: Top right corner of primary screen
+                        floatingHud.Left = SystemParameters.PrimaryScreenWidth - floatingHud.Width - 40;
+                        floatingHud.Top = 60;
+                    }
+                }
+                floatingHud.Show();
+                floatingHud.CheckDocking();
+            }
+            else
+            {
+                if (floatingHud != null)
+                {
+                    floatingHud.Hide();
+                }
+            }
+
+            if (chkSettingsFloatingHud != null) chkSettingsFloatingHud.IsChecked = showFloatingHud;
+            if (trayHudMenu != null) trayHudMenu.Text = (showFloatingHud ? "✓ " : "    ") + "桌面测速悬浮窗";
+            SaveUiPreferences();
         }
 
         private void UpdateTrayModelsMenu(List<KeyValuePair<string, string>> models, string currentModel)
@@ -1543,6 +1860,15 @@ namespace AntigravityDesktopClient
         private void ExitApplication()
         {
             trayIcon.Visible = false;
+            try
+            {
+                if (floatingHud != null)
+                {
+                    floatingHud.Close();
+                }
+            }
+            catch { }
+
             try
             {
                 SendApiPost("api/codex/restore", "{}");
@@ -1718,15 +2044,17 @@ namespace AntigravityDesktopClient
 
             // Real-time Session Telemetry (Throughput & Latency)
             var telemetry = data.ContainsKey("telemetry") ? data["telemetry"] as Dictionary<string, object> : null;
+            double currentTps = 0;
+            int currentTtft = 0;
             if (telemetry != null && telemetry.ContainsKey("avgTokensPerSec") && Convert.ToDouble(telemetry["avgTokensPerSec"]) > 0)
             {
-                double avgTps = Convert.ToDouble(telemetry["avgTokensPerSec"]);
-                int avgTtft = telemetry.ContainsKey("avgTtftMs") ? Convert.ToInt32(telemetry["avgTtftMs"]) : 0;
+                currentTps = Convert.ToDouble(telemetry["avgTokensPerSec"]);
+                currentTtft = telemetry.ContainsKey("avgTtftMs") ? Convert.ToInt32(telemetry["avgTtftMs"]) : 0;
 
-                txtMetricThroughput.Text = avgTps.ToString("0.0") + " t/s";
+                txtMetricThroughput.Text = currentTps.ToString("0.0") + " t/s";
                 txtMetricThroughput.Foreground = new SolidColorBrush(ColPrimary);
 
-                txtMetricLatency.Text = avgTtft.ToString() + " ms";
+                txtMetricLatency.Text = currentTtft.ToString() + " ms";
                 txtMetricLatency.Foreground = new SolidColorBrush(ColGreen);
             }
             else
@@ -1736,6 +2064,11 @@ namespace AntigravityDesktopClient
 
                 txtMetricLatency.Text = "-- ms";
                 txtMetricLatency.Foreground = new SolidColorBrush(ColTextMuted);
+            }
+
+            if (floatingHud != null && floatingHud.IsVisible)
+            {
+                floatingHud.UpdateTelemetry(currentTps, currentTtft);
             }
 
             // Settings & Round-Robin Mode
