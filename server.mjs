@@ -76,6 +76,8 @@ const runtime = {
   telemetry: {
     totalRequests: 0,
     totalTokens: 0,
+    totalGenSeconds: 0,
+    totalTtftMs: 0,
     avgTokensPerSec: 0,
     avgTtftMs: 0,
     lastTokensPerSec: 0,
@@ -1365,6 +1367,42 @@ async function proxyState() {
   };
 }
 
+const CURRENT_VERSION = "0.2.0";
+let cachedVersionCheck = { at: 0, result: null };
+
+async function checkAppVersion() {
+  if (Date.now() - cachedVersionCheck.at < 60_000 && cachedVersionCheck.result) {
+    return cachedVersionCheck.result;
+  }
+  try {
+    const res = await fetch("https://api.github.com/repos/yu-hx-tom/antigravity-bridge-codex/releases/latest", {
+      headers: { "User-Agent": "AntigravityCodexBridge" },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const latestTag = String(data.tag_name || "").replace(/^v/, "");
+      const hasUpdate = Boolean(latestTag && latestTag !== CURRENT_VERSION && latestTag > CURRENT_VERSION);
+      const resData = {
+        currentVersion: CURRENT_VERSION,
+        latestVersion: latestTag || CURRENT_VERSION,
+        hasUpdate,
+        releaseUrl: data.html_url || "https://github.com/yu-hx-tom/antigravity-bridge-codex/releases",
+        releaseNotes: data.body || "",
+      };
+      cachedVersionCheck = { at: Date.now(), result: resData };
+      return resData;
+    }
+  } catch {}
+  return {
+    currentVersion: CURRENT_VERSION,
+    latestVersion: CURRENT_VERSION,
+    hasUpdate: false,
+    releaseUrl: "https://github.com/yu-hx-tom/antigravity-bridge-codex/releases",
+    releaseNotes: "",
+  };
+}
+
 async function dashboard() {
   const proxy = await proxyState();
   const history = await getHistory();
@@ -1609,6 +1647,8 @@ async function handleApi(request, response, url) {
   } else if (key === "POST /api/benchmark") {
     const body = await readBody(request);
     result = await benchmarkModel(body.model || "");
+  } else if (key === "GET /api/version/check") {
+    result = await checkAppVersion();
   } else {
     const error = new Error("API 路径不存在");
     error.status = 404;

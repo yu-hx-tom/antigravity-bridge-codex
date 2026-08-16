@@ -248,10 +248,12 @@ namespace AntigravityDesktopClient
         private double lastTps = 0;
         private int lastTtft = 0;
         private int lastQuota5h = -1;
+        private System.Windows.Controls.MenuItem miModelsSubmenu;
 
         public Action OpenMainWindowAction;
         public Action OpenSettingsAction;
         public Action CloseHudAction;
+        public Action<string> SelectModelAction;
         public Action<double, double> PositionChangedAction;
 
         public FloatingHudWindow()
@@ -479,6 +481,9 @@ namespace AntigravityDesktopClient
             miOpen.Click += (s, e) => { if (OpenMainWindowAction != null) OpenMainWindowAction(); };
             cm.Items.Add(miOpen);
 
+            miModelsSubmenu = new System.Windows.Controls.MenuItem { Header = "🤖 快速切换模型" };
+            cm.Items.Add(miModelsSubmenu);
+
             System.Windows.Controls.MenuItem miSet = new System.Windows.Controls.MenuItem { Header = "⚙️ 偏好设置" };
             miSet.Click += (s, e) => { if (OpenSettingsAction != null) OpenSettingsAction(); };
             cm.Items.Add(miSet);
@@ -490,6 +495,37 @@ namespace AntigravityDesktopClient
             cm.Items.Add(miClose);
 
             ContextMenu = cm;
+        }
+
+        public void UpdateModelsMenu(List<KeyValuePair<string, string>> models, string currentModel)
+        {
+            Dispatcher.Invoke(new Action(() =>
+            {
+                if (miModelsSubmenu == null) return;
+                miModelsSubmenu.Items.Clear();
+                if (models == null || models.Count == 0)
+                {
+                    miModelsSubmenu.Items.Add(new System.Windows.Controls.MenuItem { Header = "（暂无可切模型）", IsEnabled = false });
+                    return;
+                }
+                foreach (var kvp in models)
+                {
+                    string mId = kvp.Key;
+                    string mName = kvp.Value;
+                    bool isSel = string.Equals(mId, currentModel, StringComparison.OrdinalIgnoreCase);
+                    var item = new System.Windows.Controls.MenuItem
+                    {
+                        Header = (isSel ? "✓  " : "    ") + mName,
+                        FontWeight = isSel ? FontWeights.Bold : FontWeights.Normal,
+                        Tag = mId
+                    };
+                    item.Click += (s, e) =>
+                    {
+                        if (SelectModelAction != null) SelectModelAction(mId);
+                    };
+                    miModelsSubmenu.Items.Add(item);
+                }
+            }));
         }
 
         private Geometry CreateArcGeometry(double centerX, double centerY, double radius, double startAngle, double endAngle)
@@ -712,6 +748,8 @@ namespace AntigravityDesktopClient
         private bool isCoreRunning = false;
         private bool autoRoundRobin = true;
         private string activeAccountId = "";
+        private string lastActiveAccountId = "";
+        private int lastAlerted5hQuota = 100;
 
         // UI Controls
         private TextBlock txtTopStatus;
@@ -1603,20 +1641,34 @@ namespace AntigravityDesktopClient
             pathGrid.Children.Add(btnBrowse);
             modalSp.Children.Add(pathGrid);
 
-            // Modal Actions (Save & Cancel)
-            StackPanel mActions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            // Modal Actions (Check Updates, Cancel, Save)
+            Grid mActionGrid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            mActionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            mActionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            mActionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            Button btnCheckUpdate = CreateButton("🔄 检查更新", ColCardMuted, new SolidColorBrush(ColPrimary), 11.5);
+            btnCheckUpdate.Padding = new Thickness(12, 6, 12, 6);
+            btnCheckUpdate.Click += (s, e) => CheckForUpdates(false);
+            Grid.SetColumn(btnCheckUpdate, 0);
+            mActionGrid.Children.Add(btnCheckUpdate);
+
+            StackPanel mRightButtons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             Button btnCancel = CreateButton("取消", ColCardMuted, new SolidColorBrush(ColTextMain), 12);
             btnCancel.Padding = new Thickness(16, 6, 16, 6);
             btnCancel.Margin = new Thickness(0, 0, 10, 0);
             btnCancel.Click += (s, e) => CloseSettingsModal();
-            mActions.Children.Add(btnCancel);
+            mRightButtons.Children.Add(btnCancel);
 
             Button btnSave = CreateButton("💾 保存设置", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
             btnSave.Padding = new Thickness(20, 6, 20, 6);
             btnSave.Click += (s, e) => SaveSettingsFromModal();
-            mActions.Children.Add(btnSave);
+            mRightButtons.Children.Add(btnSave);
 
-            modalSp.Children.Add(mActions);
+            Grid.SetColumn(mRightButtons, 2);
+            mActionGrid.Children.Add(mRightButtons);
+
+            modalSp.Children.Add(mActionGrid);
             modalCard.Child = modalSp;
             settingsOverlay.Child = modalCard;
             rootGrid.Children.Add(settingsOverlay);
@@ -1943,6 +1995,56 @@ namespace AntigravityDesktopClient
             ShowToast("⚙️ 偏好设置已成功保存");
         }
 
+        private void CheckForUpdates(bool silentIfLatest = false)
+        {
+            ThreadPool.QueueUserWorkItem((state) =>
+            {
+                try
+                {
+                    string json = SendApiGet("api/version/check");
+                    var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                    if (data == null) return;
+
+                    string curVer = data.ContainsKey("currentVersion") ? data["currentVersion"].ToString() : "0.2.0";
+                    string latVer = data.ContainsKey("latestVersion") ? data["latestVersion"].ToString() : curVer;
+                    bool hasUpdate = data.ContainsKey("hasUpdate") && Convert.ToBoolean(data["hasUpdate"]);
+                    string releaseUrl = data.ContainsKey("releaseUrl") ? data["releaseUrl"].ToString() : "https://github.com/yu-hx-tom/antigravity-bridge-codex/releases";
+                    string releaseNotes = data.ContainsKey("releaseNotes") ? data["releaseNotes"].ToString() : "";
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (hasUpdate)
+                        {
+                            string msg = string.Format("🎉 发现新版本 v{0}（当前版本 v{1}）！\n\n更新说明:\n{2}\n\n是否立即前往 GitHub 查看与下载？", latVer, curVer, string.IsNullOrEmpty(releaseNotes) ? "包含功能优化与性能提升" : releaseNotes);
+                            var res = MessageBox.Show(msg, "ABC 发现新版本", MessageBoxButton.YesNo, MessageBoxImage.Information);
+                            if (res == MessageBoxResult.Yes)
+                            {
+                                try
+                                {
+                                    Process.Start(new ProcessStartInfo(releaseUrl) { UseShellExecute = true });
+                                }
+                                catch { }
+                            }
+                        }
+                        else
+                        {
+                            if (!silentIfLatest)
+                            {
+                                ShowToast("✨ 当前已是最新版本 (v" + curVer + ")");
+                            }
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    if (!silentIfLatest)
+                    {
+                        Dispatcher.Invoke(() => ShowToast("检查更新失败: " + ex.Message));
+                    }
+                }
+            });
+        }
+
         private void ToggleFloatingHud(bool show)
         {
             showFloatingHud = show;
@@ -1954,6 +2056,7 @@ namespace AntigravityDesktopClient
                     floatingHud.OpenMainWindowAction = () => ShowAndActivate();
                     floatingHud.OpenSettingsAction = () => { ShowAndActivate(); OpenSettingsModal(); };
                     floatingHud.CloseHudAction = () => ToggleFloatingHud(false);
+                    floatingHud.SelectModelAction = (mId) => OnModelSelected(mId);
                     floatingHud.PositionChangedAction = (x, y) =>
                     {
                         floatingHudX = x;
@@ -2337,26 +2440,50 @@ namespace AntigravityDesktopClient
 
             // Real-time Session Telemetry (Throughput & Latency)
             var telemetry = data.ContainsKey("telemetry") ? data["telemetry"] as Dictionary<string, object> : null;
-            double currentTps = 0;
-            int currentTtft = 0;
-            if (telemetry != null && telemetry.ContainsKey("avgTokensPerSec") && Convert.ToDouble(telemetry["avgTokensPerSec"]) > 0)
+            double avgTps = 0;
+            int avgTtft = 0;
+            double lastTps = 0;
+            int lastTtft = 0;
+
+            if (telemetry != null)
             {
-                currentTps = Convert.ToDouble(telemetry["avgTokensPerSec"]);
-                currentTtft = telemetry.ContainsKey("avgTtftMs") ? Convert.ToInt32(telemetry["avgTtftMs"]) : 0;
+                if (telemetry.ContainsKey("avgTokensPerSec") && telemetry["avgTokensPerSec"] != null)
+                {
+                    double.TryParse(telemetry["avgTokensPerSec"].ToString(), out avgTps);
+                }
+                if (telemetry.ContainsKey("avgTtftMs") && telemetry["avgTtftMs"] != null)
+                {
+                    int.TryParse(telemetry["avgTtftMs"].ToString(), out avgTtft);
+                }
+                if (telemetry.ContainsKey("lastTokensPerSec") && telemetry["lastTokensPerSec"] != null)
+                {
+                    double.TryParse(telemetry["lastTokensPerSec"].ToString(), out lastTps);
+                }
+                if (telemetry.ContainsKey("lastTtftMs") && telemetry["lastTtftMs"] != null)
+                {
+                    int.TryParse(telemetry["lastTtftMs"].ToString(), out lastTtft);
+                }
+            }
 
-                txtMetricThroughput.Text = currentTps.ToString("0.0") + " t/s";
+            if (avgTps > 0)
+            {
+                txtMetricThroughput.Text = avgTps.ToString("0.0") + " t/s";
                 txtMetricThroughput.Foreground = new SolidColorBrush(ColPrimary);
+                txtMetricThroughput.ToolTip = string.Format("会话全局加权均速: {0:0.0} t/s (最近单次: {1:0.0} t/s)", avgTps, lastTps);
 
-                txtMetricLatency.Text = currentTtft.ToString() + " ms";
+                txtMetricLatency.Text = avgTtft.ToString() + " ms";
                 txtMetricLatency.Foreground = new SolidColorBrush(ColGreen);
+                txtMetricLatency.ToolTip = string.Format("会话平均首字延迟: {0} ms (最近单次: {1} ms)", avgTtft, lastTtft);
             }
             else
             {
                 txtMetricThroughput.Text = "-- t/s";
                 txtMetricThroughput.Foreground = new SolidColorBrush(ColTextMuted);
+                txtMetricThroughput.ToolTip = "暂无活跃生成测速数据";
 
                 txtMetricLatency.Text = "-- ms";
                 txtMetricLatency.Foreground = new SolidColorBrush(ColTextMuted);
+                txtMetricLatency.ToolTip = "暂无活跃生成延迟数据";
             }
 
             // Settings & Round-Robin Mode
@@ -2429,9 +2556,35 @@ namespace AntigravityDesktopClient
                 }
             }
 
+            // Low Quota Alert & Failover Toast Notifications
+            if (hud5h >= 0 && hud5h <= 15 && lastAlerted5hQuota > 15)
+            {
+                if (trayIcon != null)
+                {
+                    trayIcon.ShowBalloonTip(3500, "ABC 额度紧张预警", string.Format("当前生效账号的 5 小时可用额度仅剩 {0}%，建议切换备用账号或稍作休息。", hud5h), System.Windows.Forms.ToolTipIcon.Warning);
+                }
+                lastAlerted5hQuota = hud5h;
+            }
+            else if (hud5h > 25)
+            {
+                lastAlerted5hQuota = 100;
+            }
+
+            if (!string.IsNullOrEmpty(lastActiveAccountId) && !string.IsNullOrEmpty(activeAccountId) && lastActiveAccountId != activeAccountId && autoRoundRobin)
+            {
+                if (trayIcon != null)
+                {
+                    trayIcon.ShowBalloonTip(2500, "ABC 自动轮询调度", "已自动故障转移切换至账号: " + activeAccountId, System.Windows.Forms.ToolTipIcon.Info);
+                }
+            }
+            lastActiveAccountId = activeAccountId;
+
+            double hudTps = lastTps > 0 ? lastTps : avgTps;
+            int hudTtft = lastTtft > 0 ? lastTtft : avgTtft;
+
             if (floatingHud != null && floatingHud.IsVisible)
             {
-                floatingHud.UpdateData(currentTps, currentTtft, hud5h);
+                floatingHud.UpdateData(hudTps, hudTtft, hud5h);
             }
 
             // Models
@@ -2450,6 +2603,10 @@ namespace AntigravityDesktopClient
                 }
                 modelPicker.SetModels(modelList, currentModel);
                 UpdateTrayModelsMenu(modelList, currentModel);
+                if (floatingHud != null)
+                {
+                    floatingHud.UpdateModelsMenu(modelList, currentModel);
+                }
             }
 
             RenderAccountsList(accounts);
