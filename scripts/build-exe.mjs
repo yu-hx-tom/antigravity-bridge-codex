@@ -66,11 +66,13 @@ const desktopCsPath = path.join(ROOT, "src", "DesktopApp.cs");
 const targetExePath = path.join(APP_DIR, "AntigravityCodexBridge.exe");
 
 const manifestPath = path.join(ROOT, "src", "app.manifest");
+const icoPath = path.join(ROOT, "src", "app.ico");
 
 if (fsSync.existsSync(cscPath) && fsSync.existsSync(desktopCsPath)) {
   try {
     const manifestFlag = fsSync.existsSync(manifestPath) ? `/win32manifest:"${manifestPath}"` : "";
-    const compileCmd = `"${cscPath}" /target:winexe /optimize+ /platform:anycpu ${manifestFlag} /out:"${targetExePath}" /lib:"${wpfLib}" /r:PresentationFramework.dll,PresentationCore.dll,WindowsBase.dll,System.dll,System.Drawing.dll,System.Windows.Forms.dll,System.Xaml.dll,System.Web.Extensions.dll "${desktopCsPath}"`;
+    const iconFlag = fsSync.existsSync(icoPath) ? `/win32icon:"${icoPath}"` : "";
+    const compileCmd = `"${cscPath}" /target:winexe /optimize+ /platform:anycpu ${manifestFlag} ${iconFlag} /out:"${targetExePath}" /lib:"${wpfLib}" /r:PresentationFramework.dll,PresentationCore.dll,WindowsBase.dll,System.dll,System.Drawing.dll,System.Windows.Forms.dll,System.Xaml.dll,System.Web.Extensions.dll "${desktopCsPath}"`;
     execSync(compileCmd, { stdio: "inherit" });
     console.log(" Native Desktop GUI Client compiled successfully!");
     await fs.copyFile(targetExePath, path.join(DIST, "AntigravityCodexBridge.exe"));

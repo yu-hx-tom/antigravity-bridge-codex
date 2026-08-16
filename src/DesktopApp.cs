@@ -358,10 +358,11 @@ namespace AntigravityDesktopClient
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.Clear(System.Drawing.Color.Transparent);
 
-                int pad = size >= 32 ? 2 : 1;
-                int r = size >= 32 ? (size / 4) : 3;
+                int pad = size >= 64 ? 4 : (size >= 32 ? 2 : 1);
+                int r = (int)(size * 0.23f);
                 System.Drawing.Rectangle rect = new System.Drawing.Rectangle(pad, pad, size - pad * 2, size - pad * 2);
 
+                // 1. Superellipse Squircle Path
                 using (GraphicsPath path = new GraphicsPath())
                 {
                     path.AddArc(rect.X, rect.Y, r * 2, r * 2, 180, 90);
@@ -370,42 +371,89 @@ namespace AntigravityDesktopClient
                     path.AddArc(rect.X, rect.Bottom - r * 2, r * 2, r * 2, 90, 90);
                     path.CloseFigure();
 
+                    // 2. Cosmic Dark Slate / Electric Azure Gradient (Depth & Modernity)
                     using (System.Drawing.Drawing2D.LinearGradientBrush bgBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
                         new System.Drawing.Point(0, 0), new System.Drawing.Point(size, size),
-                        System.Drawing.Color.FromArgb(29, 78, 216),    // #1D4ED8
-                        System.Drawing.Color.FromArgb(37, 99, 235)))   // #2563EB
+                        System.Drawing.Color.FromArgb(11, 19, 43),    // #0B132B Deep Space Navy
+                        System.Drawing.Color.FromArgb(29, 78, 216)))   // #1D4ED8 Electric Blue
                     {
                         g.FillPath(bgBrush, path);
                     }
-                }
 
-                if (size >= 32)
-                {
-                    using (System.Drawing.Pen bridgePen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(224, 242, 254), size >= 64 ? 3.5f : 2.0f))
+                    // 3. Ambient Top Glow
+                    using (System.Drawing.Drawing2D.LinearGradientBrush topGlow = new System.Drawing.Drawing2D.LinearGradientBrush(
+                        new System.Drawing.Point(0, 0), new System.Drawing.Point(0, size),
+                        System.Drawing.Color.FromArgb(50, 56, 189, 248),  // Sky Blue #38BDF8
+                        System.Drawing.Color.FromArgb(0, 11, 19, 43)))
                     {
-                        bridgePen.StartCap = LineCap.Round;
-                        bridgePen.EndCap = LineCap.Round;
-                        g.DrawArc(bridgePen, (int)(size * 0.20), (int)(size * 0.44), (int)(size * 0.60), (int)(size * 0.42), 180, 180);
+                        g.FillPath(topGlow, path);
+                    }
+
+                    // 4. Subtle Outer Neon Edge
+                    float borderW = size >= 64 ? 1.8f : (size >= 32 ? 1.2f : 0.8f);
+                    using (System.Drawing.Drawing2D.LinearGradientBrush borderBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
+                        new System.Drawing.Point(0, 0), new System.Drawing.Point(size, size),
+                        System.Drawing.Color.FromArgb(190, 56, 189, 248),  // Neon Cyan #38BDF8
+                        System.Drawing.Color.FromArgb(90, 168, 85, 247)))   // Neon Violet #A855F7
+                    using (System.Drawing.Pen borderPen = new System.Drawing.Pen(borderBrush, borderW))
+                    {
+                        g.DrawPath(borderPen, path);
                     }
                 }
 
-                float fontSize = 96.0f;
-                if (size <= 16) fontSize = 8.5f;
-                else if (size <= 24) fontSize = 11.5f;
-                else if (size <= 32) fontSize = 14.5f;
-                else if (size <= 48) fontSize = 21.0f;
-                else if (size <= 64) fontSize = 28.0f;
+                // 5. Artistic Quantum Synapse Bridge Arc (Overarching gravity beam)
+                if (size >= 20)
+                {
+                    float arcW = size >= 128 ? 6.0f : (size >= 64 ? 3.4f : (size >= 32 ? 2.0f : 1.4f));
+                    using (System.Drawing.Drawing2D.LinearGradientBrush arcBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
+                        new System.Drawing.Point(0, 0), new System.Drawing.Point(size, size),
+                        System.Drawing.Color.FromArgb(255, 56, 189, 248),   // Cyan #38BDF8
+                        System.Drawing.Color.FromArgb(255, 192, 132, 252))) // Violet #C084FC
+                    using (System.Drawing.Pen bridgePen = new System.Drawing.Pen(arcBrush, arcW))
+                    {
+                        bridgePen.StartCap = LineCap.Round;
+                        bridgePen.EndCap = LineCap.Round;
+                        g.DrawArc(bridgePen, (int)(size * 0.16), (int)(size * 0.16), (int)(size * 0.68), (int)(size * 0.50), 185, 170);
+                    }
+
+                    // Bridge center glowing pulse node
+                    if (size >= 32)
+                    {
+                        int dotSize = Math.Max(3, (int)(size * 0.055f));
+                        int dotX = (int)(size * 0.50f) - dotSize / 2;
+                        int dotY = (int)(size * 0.16f) - dotSize / 2;
+                        using (SolidBrush dotBrush = new SolidBrush(System.Drawing.Color.FromArgb(255, 255, 255)))
+                        {
+                            g.FillEllipse(dotBrush, dotX, dotY, dotSize, dotSize);
+                        }
+                    }
+                }
+
+                // 6. Stylized "ABC" Typography with Perfect Vertical & Horizontal Centering
+                float fontSize;
+                if (size <= 16) fontSize = 7.5f;
+                else if (size <= 24) fontSize = 10.0f;
+                else if (size <= 32) fontSize = 13.0f;
+                else if (size <= 48) fontSize = 19.5f;
+                else if (size <= 64) fontSize = 26.0f;
+                else if (size <= 128) fontSize = 52.0f;
+                else fontSize = 104.0f;
 
                 using (Font font = new Font("Segoe UI", fontSize, System.Drawing.FontStyle.Bold, GraphicsUnit.Pixel))
-                using (SolidBrush textBrush = new SolidBrush(System.Drawing.Color.White))
                 {
                     StringFormat sf = new StringFormat
                     {
                         Alignment = StringAlignment.Center,
                         LineAlignment = StringAlignment.Center
                     };
-                    float yOffset = size >= 32 ? (size * 0.05f) : 0f;
-                    g.DrawString("AG", font, textBrush, new RectangleF(0, yOffset, size, size), sf);
+
+                    float yOffset = size >= 32 ? (size * 0.09f) : (size >= 20 ? (size * 0.05f) : 0f);
+                    RectangleF textRect = new RectangleF(0, yOffset, size, size);
+
+                    using (SolidBrush textBrush = new SolidBrush(System.Drawing.Color.FromArgb(255, 255, 255)))
+                    {
+                        g.DrawString("ABC", font, textBrush, textRect, sf);
+                    }
                 }
             }
             return bmp;
@@ -420,7 +468,7 @@ namespace AntigravityDesktopClient
             this.Icon = Imaging.CreateBitmapSourceFromHIcon(hIcon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
 
             System.Windows.Forms.ContextMenu menu = new System.Windows.Forms.ContextMenu();
-            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🌟 打开 AntigravityCodexBridge", (s, e) => ShowAndActivate()));
+            menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🌟 打开 Antigravity Bridge Codex (ABC)", (s, e) => ShowAndActivate()));
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🚀 启动 Codex", (s, e) => LaunchCodexService()));
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🛡️ 恢复官方配置", (s, e) => RestoreOfficialConfig()));
             
@@ -433,7 +481,7 @@ namespace AntigravityDesktopClient
             menu.MenuItems.Add(new System.Windows.Forms.MenuItem("🚪 退出程序", (s, e) => ExitApplication()));
 
             trayIcon = new System.Windows.Forms.NotifyIcon();
-            trayIcon.Text = "AntigravityCodexBridge";
+            trayIcon.Text = "Antigravity Bridge Codex (ABC)";
             trayIcon.Icon = ico;
             trayIcon.ContextMenu = menu;
             trayIcon.Visible = true;
@@ -442,7 +490,7 @@ namespace AntigravityDesktopClient
 
         private void InitializeComponent()
         {
-            Title = "AntigravityCodexBridge";
+            Title = "Antigravity Bridge Codex (ABC)";
             Width = 1060;
             Height = 750;
             MinWidth = 960;
@@ -512,7 +560,21 @@ namespace AntigravityDesktopClient
 
             StackPanel titleGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             StackPanel titleLine = new StackPanel { Orientation = Orientation.Horizontal };
-            titleLine.Children.Add(new TextBlock { Text = "AntigravityCodexBridge", FontWeight = FontWeights.Bold, FontSize = 16.5, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 8, 0) });
+            titleLine.Children.Add(new TextBlock { Text = "Antigravity Bridge Codex", FontWeight = FontWeights.Bold, FontSize = 16.5, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 8, 0) });
+            
+            Border badgeAbc = new Border
+            {
+                Background = new SolidColorBrush(ColPrimaryLight),
+                BorderBrush = new SolidColorBrush(ColPrimary),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(5, 1, 5, 1),
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            badgeAbc.Child = new TextBlock { Text = "ABC", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
+            titleLine.Children.Add(badgeAbc);
+
             titleLine.Children.Add(new TextBlock { Text = "v0.2.0", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColPrimary), VerticalAlignment = VerticalAlignment.Center });
             titleGroup.Children.Add(titleLine);
             titleGroup.Children.Add(new TextBlock { Text = "LOCAL RUNTIME · 127.0.0.1 ONLY · ZERO DB CONTAMINATION", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMuted) });
@@ -2698,12 +2760,13 @@ namespace AntigravityDesktopClient
             }
 
             bool createdNew;
-            singleInstanceMutex = new Mutex(true, "Global\\AntigravityCodexBridge_SingleInstance_Mutex", out createdNew);
+            singleInstanceMutex = new Mutex(true, "Global\\AntigravityBridgeCodex_ABC_Mutex", out createdNew);
 
             if (!createdNew)
             {
                 PostMessage((IntPtr)0xFFFF, WM_SHOWME, IntPtr.Zero, IntPtr.Zero);
-                IntPtr hWnd = FindWindow(null, "AntigravityCodexBridge");
+                IntPtr hWnd = FindWindow(null, "Antigravity Bridge Codex (ABC)");
+                if (hWnd == IntPtr.Zero) hWnd = FindWindow(null, "AntigravityCodexBridge");
                 if (hWnd != IntPtr.Zero)
                 {
                     ShowWindow(hWnd, SW_RESTORE);
