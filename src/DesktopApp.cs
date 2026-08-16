@@ -226,6 +226,7 @@ namespace AntigravityDesktopClient
         private Button btnToggleCore;
         private Button btnToggleRoundRobin;
         private Button btnRefreshQuota;
+        private Button btnToggleTheme;
         private ModelPickerControl modelPicker;
         private StackPanel panelAccounts;
         private TextBlock txtCodexStatus;
@@ -239,19 +240,52 @@ namespace AntigravityDesktopClient
         private TextBlock txtToastMessage;
         private DispatcherTimer toastTimer;
 
-        // Blue-White Clean Palette Tokens
-        private readonly System.Windows.Media.Color ColBg = System.Windows.Media.Color.FromRgb(248, 250, 252);        // #F8FAFC Slate 50
-        private readonly System.Windows.Media.Color ColCard = System.Windows.Media.Color.FromRgb(255, 255, 255);      // #FFFFFF Pure White
-        private readonly System.Windows.Media.Color ColCardMuted = System.Windows.Media.Color.FromRgb(241, 245, 249); // #F1F5F9 Slate 100
-        private readonly System.Windows.Media.Color ColBorder = System.Windows.Media.Color.FromRgb(226, 232, 240);    // #E2E8F0 Slate 200
-        private readonly System.Windows.Media.Color ColPrimary = System.Windows.Media.Color.FromRgb(37, 99, 235);      // #2563EB Royal Blue
-        private readonly System.Windows.Media.Color ColPrimaryDark = System.Windows.Media.Color.FromRgb(29, 78, 216);  // #1D4ED8 Dark Blue
-        private readonly System.Windows.Media.Color ColPrimaryLight = System.Windows.Media.Color.FromRgb(239, 246, 255);// #EFF6FF Ice Blue
-        private readonly System.Windows.Media.Color ColTextMain = System.Windows.Media.Color.FromRgb(15, 23, 42);     // #0F172A Navy Slate
-        private readonly System.Windows.Media.Color ColTextMuted = System.Windows.Media.Color.FromRgb(71, 85, 105);   // #475569 Crisp Slate 600
-        private readonly System.Windows.Media.Color ColGreen = System.Windows.Media.Color.FromRgb(16, 185, 129);       // #10B981 Emerald
-        private readonly System.Windows.Media.Color ColAmber = System.Windows.Media.Color.FromRgb(245, 158, 11);       // #F59E0B Amber
-        private readonly System.Windows.Media.Color ColRed = System.Windows.Media.Color.FromRgb(239, 68, 68);          // #EF4444 Red
+        // Responsive Dual-Column Controls
+        private Grid responsiveGrid;
+        private Border panelRightSide;
+        private StackPanel logsStreamPanel;
+        private TextBlock txtRightStatusPort;
+        private TextBlock txtRightStatusBackup;
+        private Border topBarBorder;
+        private Border footerBorder;
+        private ScrollViewer mainScroll;
+
+        // Theme State & Dynamic Slate Palette (C# 5 Compatible)
+        private bool isDarkMode = false;
+        private System.Windows.Media.Color ColBg { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(11, 15, 25) : System.Windows.Media.Color.FromRgb(248, 250, 252); } }
+        private System.Windows.Media.Color ColCard { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(21, 29, 46) : System.Windows.Media.Color.FromRgb(255, 255, 255); } }
+        private System.Windows.Media.Color ColCardMuted { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(30, 41, 59) : System.Windows.Media.Color.FromRgb(241, 245, 249); } }
+        private System.Windows.Media.Color ColBorder { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(45, 59, 83) : System.Windows.Media.Color.FromRgb(226, 232, 240); } }
+        private System.Windows.Media.Color ColPrimary { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(56, 189, 248) : System.Windows.Media.Color.FromRgb(37, 99, 235); } }
+        private System.Windows.Media.Color ColPrimaryDark { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(2, 132, 199) : System.Windows.Media.Color.FromRgb(29, 78, 216); } }
+        private System.Windows.Media.Color ColPrimaryLight { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(30, 58, 95) : System.Windows.Media.Color.FromRgb(239, 246, 255); } }
+        private System.Windows.Media.Color ColTextMain { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(248, 250, 252) : System.Windows.Media.Color.FromRgb(15, 23, 42); } }
+        private System.Windows.Media.Color ColTextMuted { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(71, 85, 105); } }
+        private System.Windows.Media.Color ColGreen { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(52, 211, 153) : System.Windows.Media.Color.FromRgb(16, 185, 129); } }
+        private System.Windows.Media.Color ColAmber { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(251, 191, 36) : System.Windows.Media.Color.FromRgb(245, 158, 11); } }
+        private System.Windows.Media.Color ColRed { get { return isDarkMode ? System.Windows.Media.Color.FromRgb(248, 113, 113) : System.Windows.Media.Color.FromRgb(239, 68, 68); } }
+
+        private System.Windows.Media.Color GetQuotaColor(int percent)
+        {
+            if (percent > 50)
+            {
+                return isDarkMode
+                    ? System.Windows.Media.Color.FromRgb(56, 189, 248)   // Sky Blue 400
+                    : System.Windows.Media.Color.FromRgb(2, 132, 199);    // Sky Blue 600
+            }
+            else if (percent > 20)
+            {
+                return isDarkMode
+                    ? System.Windows.Media.Color.FromRgb(251, 191, 36)   // Amber 400
+                    : System.Windows.Media.Color.FromRgb(245, 158, 11);   // Amber 500
+            }
+            else
+            {
+                return isDarkMode
+                    ? System.Windows.Media.Color.FromRgb(248, 113, 113)  // Red 400
+                    : System.Windows.Media.Color.FromRgb(239, 68, 68);    // Red 500
+            }
+        }
 
         public MainWindow()
         {
@@ -377,7 +411,7 @@ namespace AntigravityDesktopClient
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });  // Footer
 
             // 1. TOPBAR
-            Border topBar = new Border
+            topBarBorder = new Border
             {
                 Background = new SolidColorBrush(ColCard),
                 BorderBrush = new SolidColorBrush(ColBorder),
@@ -420,7 +454,7 @@ namespace AntigravityDesktopClient
             Grid.SetColumn(brandPanel, 0);
             topGrid.Children.Add(brandPanel);
 
-            // Right Status
+            // Right Status & Actions
             StackPanel rightTop = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             dotTopStatus = new System.Windows.Shapes.Ellipse
             {
@@ -429,28 +463,34 @@ namespace AntigravityDesktopClient
                 Fill = new SolidColorBrush(ColGreen),
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            txtTopStatus = new TextBlock { Text = "核心服务在线 (127.0.0.1:8787)", FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 16, 0) };
+            txtTopStatus = new TextBlock { Text = "核心服务在线 (127.0.0.1:8787)", FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
             
+            btnToggleTheme = CreateButton("🌙 深色", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
+            btnToggleTheme.Padding = new Thickness(12, 6, 12, 6);
+            btnToggleTheme.Margin = new Thickness(0, 0, 10, 0);
+            btnToggleTheme.Click += (s, e) => ToggleTheme();
+
             btnToggleCore = CreateButton("停止服务", ColCardMuted, new SolidColorBrush(ColTextMain), 12);
             btnToggleCore.Padding = new Thickness(14, 6, 14, 6);
             btnToggleCore.Click += (s, e) => ToggleCoreService();
 
             rightTop.Children.Add(dotTopStatus);
             rightTop.Children.Add(txtTopStatus);
+            rightTop.Children.Add(btnToggleTheme);
             rightTop.Children.Add(btnToggleCore);
             Grid.SetColumn(rightTop, 2);
             topGrid.Children.Add(rightTop);
 
-            topBar.Child = topGrid;
-            Grid.SetRow(topBar, 0);
-            rootGrid.Children.Add(topBar);
+            topBarBorder.Child = topGrid;
+            Grid.SetRow(topBarBorder, 0);
+            rootGrid.Children.Add(topBarBorder);
 
             // 2. MAIN SCROLL BODY
-            ScrollViewer scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(32, 24, 32, 24) };
+            mainScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(28, 20, 28, 20) };
             StackPanel body = new StackPanel();
 
             // Section 0: Metrics Row
-            Grid metricsGrid = new Grid { Margin = new Thickness(0, 0, 0, 24) };
+            Grid metricsGrid = new Grid { Margin = new Thickness(0, 0, 0, 20) };
             metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -469,13 +509,13 @@ namespace AntigravityDesktopClient
                 BorderBrush = new SolidColorBrush(ColBorder),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(16),
-                Padding = new Thickness(28),
-                Margin = new Thickness(0, 0, 0, 26),
-                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 16, Opacity = 0.04, ShadowDepth = 2 }
+                Padding = new Thickness(24),
+                Margin = new Thickness(0, 0, 0, 20),
+                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 16, Opacity = isDarkMode ? 0.2 : 0.04, ShadowDepth = 2 }
             };
             Grid heroGrid = new Grid();
             heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
+            heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(270) });
 
             StackPanel heroLeft = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             
@@ -502,7 +542,7 @@ namespace AntigravityDesktopClient
                 CornerRadius = new CornerRadius(6),
                 Padding = new Thickness(8, 3, 8, 3)
             };
-            autoRestorePill.Child = new TextBlock { Text = "🛡️ 关闭 Codex 窗口自动还原官方", FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMuted) };
+            autoRestorePill.Child = new TextBlock { Text = "🛡️ 关窗自动还原官方", FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMuted) };
             badgeRow.Children.Add(autoRestorePill);
             heroLeft.Children.Add(badgeRow);
 
@@ -510,27 +550,27 @@ namespace AntigravityDesktopClient
             TextBlock heroTitle = new TextBlock
             {
                 Text = "把可用模型，接到本地 Codex。",
-                FontSize = 23,
+                FontSize = 21,
                 FontWeight = FontWeights.Bold,
                 Foreground = new SolidColorBrush(ColTextMain),
-                Margin = new Thickness(0, 0, 0, 8)
+                Margin = new Thickness(0, 0, 0, 6)
             };
             heroLeft.Children.Add(heroTitle);
 
             txtCodexStatus = new TextBlock
             {
                 Text = "保留官方登录与历史会话，点击启动按钮将自动应用 API Service 配置。使用完毕关闭 Codex 桌面端窗口即可自动无感还原。",
-                FontSize = 12.5,
+                FontSize = 12,
                 Foreground = new SolidColorBrush(ColTextMuted),
                 TextWrapping = TextWrapping.Wrap,
-                LineHeight = 19,
-                Margin = new Thickness(0, 0, 0, 18)
+                LineHeight = 18,
+                Margin = new Thickness(0, 0, 0, 14)
             };
             heroLeft.Children.Add(txtCodexStatus);
 
             // Model Switcher Line
             StackPanel modelRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            modelRow.Children.Add(new TextBlock { Text = "生效模型：", FontSize = 13, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center });
+            modelRow.Children.Add(new TextBlock { Text = "生效模型：", FontSize = 12.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center });
             
             modelPicker = new ModelPickerControl { Margin = new Thickness(0, 0, 12, 0) };
             modelPicker.ModelSelected += (modelId) => OnModelSelected(modelId);
@@ -544,13 +584,13 @@ namespace AntigravityDesktopClient
             StackPanel heroRight = new StackPanel { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
             btnLaunchCodex = new Button
             {
-                Width = 250,
-                Height = 68,
+                Width = 240,
+                Height = 62,
                 Background = new SolidColorBrush(ColPrimary),
                 Foreground = System.Windows.Media.Brushes.White,
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
-                Effect = new DropShadowEffect { Color = ColPrimary, BlurRadius = 22, Opacity = 0.35, ShadowDepth = 3 }
+                Effect = new DropShadowEffect { Color = ColPrimary, BlurRadius = 20, Opacity = 0.35, ShadowDepth = 3 }
             };
             ControlTemplate btnTemplate = new ControlTemplate(typeof(Button));
             FrameworkElementFactory borderFactory = new FrameworkElementFactory(typeof(Border));
@@ -575,7 +615,7 @@ namespace AntigravityDesktopClient
             TextBlock btnMainText = new TextBlock
             {
                 Text = "🚀 启动 Codex",
-                FontSize = 17,
+                FontSize = 16,
                 FontWeight = FontWeights.Bold,
                 Foreground = System.Windows.Media.Brushes.White,
                 HorizontalAlignment = HorizontalAlignment.Center
@@ -583,11 +623,11 @@ namespace AntigravityDesktopClient
             TextBlock btnSubText = new TextBlock
             {
                 Text = "一键接管 · 关窗即还原",
-                FontSize = 10.5,
+                FontSize = 10,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = new SolidColorBrush(System.Windows.Media.Color.FromArgb(220, 255, 255, 255)),
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 3, 0, 0)
+                Margin = new Thickness(0, 2, 0, 0)
             };
             btnContent.Children.Add(btnMainText);
             btnContent.Children.Add(btnSubText);
@@ -596,7 +636,7 @@ namespace AntigravityDesktopClient
             heroRight.Children.Add(btnLaunchCodex);
 
             btnRestore = CreateButton("🛡️ 恢复官方配置", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5, false);
-            btnRestore.Width = 250;
+            btnRestore.Width = 240;
             btnRestore.Height = 32;
             btnRestore.Margin = new Thickness(0, 8, 0, 0);
             btnRestore.Click += (s, e) => RestoreOfficialConfig();
@@ -606,16 +646,15 @@ namespace AntigravityDesktopClient
             heroGrid.Children.Add(heroRight);
 
             heroCard.Child = heroGrid;
-            body.Children.Add(heroCard);
 
             // Section 2: Accounts & Quotas Header (Includes Round-Robin Mode Toggle)
-            Grid accHeaderGrid = new Grid { Margin = new Thickness(0, 0, 0, 14) };
+            Grid accHeaderGrid = new Grid { Margin = new Thickness(0, 0, 0, 12) };
             accHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             accHeaderGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             StackPanel accTitleGroup = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            TextBlock sectionNo = new TextBlock { Text = "02", FontFamily = new System.Windows.Media.FontFamily("Georgia"), FontStyle = FontStyles.Italic, FontSize = 22, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(0, 0, 8, 0) };
-            TextBlock accTitle = new TextBlock { Text = "账号与额度", FontSize = 18, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 10, 0) };
+            TextBlock sectionNo = new TextBlock { Text = "02", FontFamily = new System.Windows.Media.FontFamily("Georgia"), FontStyle = FontStyles.Italic, FontSize = 20, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(0, 0, 8, 0) };
+            TextBlock accTitle = new TextBlock { Text = "账号与额度", FontSize = 17, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 10, 0) };
             accTitleGroup.Children.Add(sectionNo);
             accTitleGroup.Children.Add(accTitle);
             Grid.SetColumn(accTitleGroup, 0);
@@ -625,35 +664,56 @@ namespace AntigravityDesktopClient
             
             // Round-Robin Mode Switch Button
             btnToggleRoundRobin = CreateButton("🔄 自动轮询: 开启", ColPrimaryLight, new SolidColorBrush(ColPrimaryDark), 11.5, true);
-            btnToggleRoundRobin.Padding = new Thickness(14, 6, 14, 6);
-            btnToggleRoundRobin.Margin = new Thickness(0, 0, 10, 0);
+            btnToggleRoundRobin.Padding = new Thickness(12, 5, 12, 5);
+            btnToggleRoundRobin.Margin = new Thickness(0, 0, 8, 0);
             btnToggleRoundRobin.Click += (s, e) => ToggleRoundRobinMode();
             accActions.Children.Add(btnToggleRoundRobin);
 
             btnRefreshQuota = CreateButton("刷新额度", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
-            btnRefreshQuota.Padding = new Thickness(14, 6, 14, 6);
+            btnRefreshQuota.Padding = new Thickness(12, 5, 12, 5);
             btnRefreshQuota.Click += (s, e) => RefreshQuota();
             accActions.Children.Add(btnRefreshQuota);
 
-            Button btnAddAccount = CreateButton("+ 登录 Google 账号", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
-            btnAddAccount.Padding = new Thickness(16, 6, 16, 6);
-            btnAddAccount.Margin = new Thickness(10, 0, 0, 0);
+            Button btnAddAccount = CreateButton("+ 登录 Google 账号", ColPrimary, System.Windows.Media.Brushes.White, 11.5, true);
+            btnAddAccount.Padding = new Thickness(14, 5, 14, 5);
+            btnAddAccount.Margin = new Thickness(8, 0, 0, 0);
             btnAddAccount.Click += (s, e) => StartOAuthLogin();
             accActions.Children.Add(btnAddAccount);
 
             Grid.SetColumn(accActions, 1);
             accHeaderGrid.Children.Add(accActions);
-            body.Children.Add(accHeaderGrid);
 
+            // Setup Responsive Dual-Column Grid
+            responsiveGrid = new Grid();
+            responsiveGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.15, GridUnitType.Star) });
+            responsiveGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.85, GridUnitType.Star) });
+
+            // Left Column Content
+            StackPanel leftColumn = new StackPanel();
+            leftColumn.Children.Add(heroCard);
+            leftColumn.Children.Add(accHeaderGrid);
             panelAccounts = new StackPanel();
-            body.Children.Add(panelAccounts);
+            leftColumn.Children.Add(panelAccounts);
+            Grid.SetColumn(leftColumn, 0);
+            responsiveGrid.Children.Add(leftColumn);
 
-            scroll.Content = body;
-            Grid.SetRow(scroll, 1);
-            rootGrid.Children.Add(scroll);
+            // Right Column: Live Stream & Diagnostics Cards
+            panelRightSide = new Border();
+            StackPanel rightColumn = new StackPanel();
+            rightColumn.Children.Add(CreateLiveLogsCard());
+            rightColumn.Children.Add(CreateDiagnosticsCard());
+            panelRightSide.Child = rightColumn;
+            Grid.SetColumn(panelRightSide, 1);
+            responsiveGrid.Children.Add(panelRightSide);
+
+            body.Children.Add(responsiveGrid);
+
+            mainScroll.Content = body;
+            Grid.SetRow(mainScroll, 1);
+            rootGrid.Children.Add(mainScroll);
 
             // 3. FOOTER
-            Border footer = new Border
+            footerBorder = new Border
             {
                 Background = new SolidColorBrush(ColCard),
                 BorderBrush = new SolidColorBrush(ColBorder),
@@ -671,9 +731,9 @@ namespace AntigravityDesktopClient
             Grid.SetColumn(footRight, 2);
             footerGrid.Children.Add(footLeft);
             footerGrid.Children.Add(footRight);
-            footer.Child = footerGrid;
-            Grid.SetRow(footer, 2);
-            rootGrid.Children.Add(footer);
+            footerBorder.Child = footerGrid;
+            Grid.SetRow(footerBorder, 2);
+            rootGrid.Children.Add(footerBorder);
 
             // 4. IN-APP CENTER FLOATING TOAST / HUD NOTIFICATION
             toastContainer = new Border
@@ -729,6 +789,8 @@ namespace AntigravityDesktopClient
 
             StateChanged += MainWindow_StateChanged;
             Closing += MainWindow_Closing;
+            SizeChanged += (s, e) => UpdateResponsiveLayout();
+            UpdateResponsiveLayout();
         }
 
         private void ShowToast(string message)
@@ -810,6 +872,171 @@ namespace AntigravityDesktopClient
             template.VisualTree = border;
             btn.Template = template;
             return btn;
+        }
+
+        private void ToggleTheme()
+        {
+            isDarkMode = !isDarkMode;
+            if (btnToggleTheme != null)
+            {
+                btnToggleTheme.Content = isDarkMode ? "☀️ 浅色" : "🌙 深色";
+                btnToggleTheme.Background = new SolidColorBrush(ColCardMuted);
+                btnToggleTheme.Foreground = new SolidColorBrush(ColTextMain);
+            }
+            this.Background = new SolidColorBrush(ColBg);
+            this.Foreground = new SolidColorBrush(ColTextMain);
+            if (topBarBorder != null)
+            {
+                topBarBorder.Background = new SolidColorBrush(ColCard);
+                topBarBorder.BorderBrush = new SolidColorBrush(ColBorder);
+            }
+            if (footerBorder != null)
+            {
+                footerBorder.Background = new SolidColorBrush(ColCard);
+                footerBorder.BorderBrush = new SolidColorBrush(ColBorder);
+            }
+            FetchDashboardData();
+            ShowToast(isDarkMode ? "🌙 已切换为 Slate 深色模式" : "☀️ 已切换为极简浅色模式");
+        }
+
+        private void UpdateResponsiveLayout()
+        {
+            if (responsiveGrid == null || panelRightSide == null) return;
+            if (this.ActualWidth >= 1040)
+            {
+                responsiveGrid.ColumnDefinitions[0].Width = new GridLength(1.15, GridUnitType.Star);
+                responsiveGrid.ColumnDefinitions[1].Width = new GridLength(0.85, GridUnitType.Star);
+                panelRightSide.Visibility = Visibility.Visible;
+                panelRightSide.Margin = new Thickness(16, 0, 0, 0);
+            }
+            else
+            {
+                responsiveGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+                responsiveGrid.ColumnDefinitions[1].Width = new GridLength(0);
+                panelRightSide.Visibility = Visibility.Collapsed;
+                panelRightSide.Margin = new Thickness(0);
+            }
+        }
+
+        private Border CreateLiveLogsCard()
+        {
+            Border card = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(16, 12, 16, 12),
+                Margin = new Thickness(0, 0, 0, 14),
+                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 12, Opacity = isDarkMode ? 0.2 : 0.04, ShadowDepth = 1.5 }
+            };
+            StackPanel sp = new StackPanel();
+
+            Grid hGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            hGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            hGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel titleSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            titleSp.Children.Add(new TextBlock { Text = "⚡ 实时调用流", FontWeight = FontWeights.Bold, FontSize = 13, Foreground = new SolidColorBrush(ColTextMain) });
+            titleSp.Children.Add(new TextBlock { Text = "LIVE STREAM", FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 8.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(6, 2, 0, 0) });
+            Grid.SetColumn(titleSp, 0);
+            hGrid.Children.Add(titleSp);
+
+            Border dotLive = new Border { Width = 7, Height = 7, CornerRadius = new CornerRadius(3.5), Background = new SolidColorBrush(ColGreen), VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(dotLive, 1);
+            hGrid.Children.Add(dotLive);
+            sp.Children.Add(hGrid);
+
+            logsStreamPanel = new StackPanel();
+            logsStreamPanel.Children.Add(new TextBlock { Text = "等待服务调用活动...", FontSize = 10.5, Foreground = new SolidColorBrush(ColTextMuted) });
+            sp.Children.Add(logsStreamPanel);
+
+            card.Child = sp;
+            return card;
+        }
+
+        private Border CreateDiagnosticsCard()
+        {
+            Border card = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(16, 12, 16, 12),
+                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 12, Opacity = isDarkMode ? 0.2 : 0.04, ShadowDepth = 1.5 }
+            };
+            StackPanel sp = new StackPanel();
+
+            TextBlock title = new TextBlock { Text = "🛡️ 运行环境与安全快照", FontWeight = FontWeights.Bold, FontSize = 13, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 8) };
+            sp.Children.Add(title);
+
+            // Row 1: Proxy Port
+            sp.Children.Add(CreateDiagInfoRow("本地代理端口", "127.0.0.1:8787", out txtRightStatusPort));
+            // Row 2: Codex Snapshot
+            sp.Children.Add(CreateDiagInfoRow("官方配置快照", "已就绪 · 关窗自动还原", out txtRightStatusBackup));
+
+            // Clean Cache Button
+            Button btnClean = CreateButton("🧹 存储管家 / 瘦身建议", ColCardMuted, new SolidColorBrush(ColTextMain), 11);
+            btnClean.Padding = new Thickness(10, 5, 10, 5);
+            btnClean.Margin = new Thickness(0, 6, 0, 0);
+            btnClean.Click += (s, e) =>
+            {
+                ShowToast("💡 提示：可清理 ~/.antigravity_cockpit/instances/codex 释放空间");
+            };
+            sp.Children.Add(btnClean);
+
+            card.Child = sp;
+            return card;
+        }
+
+        private UIElement CreateDiagInfoRow(string label, string value, out TextBlock valTxt)
+        {
+            Grid g = new Grid { Margin = new Thickness(0, 0, 0, 5) };
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            TextBlock lbl = new TextBlock { Text = label, FontSize = 10.5, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetColumn(lbl, 0);
+            g.Children.Add(lbl);
+
+            valTxt = new TextBlock { Text = value, FontSize = 10.5, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            Grid.SetColumn(valTxt, 1);
+            g.Children.Add(valTxt);
+            return g;
+        }
+
+        private UIElement CreateLogLine(string time, string level, string message)
+        {
+            Border b = new Border
+            {
+                Background = new SolidColorBrush(ColCardMuted),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(7, 3, 7, 3),
+                Margin = new Thickness(0, 0, 0, 3)
+            };
+            Grid g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            string timeOnly = time;
+            try
+            {
+                DateTime dt;
+                if (DateTime.TryParse(time, out dt)) timeOnly = dt.ToLocalTime().ToString("HH:mm:ss");
+            }
+            catch {}
+
+            TextBlock tTxt = new TextBlock { Text = timeOnly, FontFamily = new System.Windows.Media.FontFamily("Consolas"), FontSize = 9, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(tTxt, 0);
+            g.Children.Add(tTxt);
+
+            TextBlock mTxt = new TextBlock { Text = message, FontSize = 9.5, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            Grid.SetColumn(mTxt, 1);
+            g.Children.Add(mTxt);
+
+            b.Child = g;
+            return b;
         }
 
         private string GetFriendlyModelName(string modelId)
@@ -1154,6 +1381,35 @@ namespace AntigravityDesktopClient
             var accounts = data.ContainsKey("accounts") ? data["accounts"] as ArrayList : null;
             txtMetricAccounts.Text = accounts != null ? accounts.Count.ToString() : "0";
             RenderAccountsList(accounts);
+
+            // Right Panel Diagnostics & Live Logs Stream
+            if (txtRightStatusPort != null)
+            {
+                txtRightStatusPort.Text = isOnline ? "127.0.0.1:8787 (正常运行)" : "127.0.0.1:8787 (未运行)";
+                txtRightStatusPort.Foreground = isOnline ? new SolidColorBrush(ColGreen) : new SolidColorBrush(ColRed);
+            }
+            if (txtRightStatusBackup != null)
+            {
+                txtRightStatusBackup.Text = isCodexActive ? "已接管 · 关窗自动还原" : "官方原生 · 快照就绪";
+                txtRightStatusBackup.Foreground = isCodexActive ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColTextMain);
+            }
+
+            var logs = data.ContainsKey("logs") ? data["logs"] as ArrayList : null;
+            if (logsStreamPanel != null && logs != null && logs.Count > 0)
+            {
+                logsStreamPanel.Children.Clear();
+                int count = 0;
+                for (int i = logs.Count - 1; i >= 0 && count < 6; i--)
+                {
+                    var logDict = logs[i] as Dictionary<string, object>;
+                    if (logDict == null) continue;
+                    string time = logDict.ContainsKey("time") ? logDict["time"].ToString() : "";
+                    string msg = logDict.ContainsKey("message") ? logDict["message"].ToString() : "";
+                    string level = logDict.ContainsKey("level") ? logDict["level"].ToString() : "info";
+                    logsStreamPanel.Children.Add(CreateLogLine(time, level, msg));
+                    count++;
+                }
+            }
         }
 
         private void UpdateRoundRobinButtonUI()
@@ -1792,9 +2048,7 @@ namespace AntigravityDesktopClient
             };
             circleGrid.Children.Add(bgCircle);
 
-            System.Windows.Media.Color ringColor = percent > 50
-                ? ColPrimary
-                : (percent > 20 ? ColAmber : ColRed);
+            System.Windows.Media.Color ringColor = GetQuotaColor(percent);
 
             System.Windows.Shapes.Path progressPath = new System.Windows.Shapes.Path
             {

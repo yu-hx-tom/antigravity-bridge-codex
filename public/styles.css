@@ -7,11 +7,26 @@
   --signal: #e9582b;
   --signal-deep: #c83d18;
   --lime: #b7d36b;
-  --good: #2b7f62;
+  --good: #0284c7;
   --warn: #bb7a18;
   --bad: #b43a2c;
   --shadow: 0 24px 70px rgba(27, 48, 43, .12);
   --radius: 22px;
+}
+
+[data-theme="dark"] {
+  --paper: #0b0f19;
+  --paper-bright: #151d2e;
+  --ink: #f8fafc;
+  --ink-soft: #94a3b8;
+  --line: #2d3b53;
+  --signal: #38bdf8;
+  --signal-deep: #0284c7;
+  --lime: #34d399;
+  --good: #38bdf8;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --shadow: 0 24px 70px rgba(0, 0, 0, .45);
 }
 
 * { box-sizing: border-box; }
@@ -25,6 +40,14 @@ body {
     var(--paper);
   font-family: Bahnschrift, "Microsoft YaHei", sans-serif;
   min-height: 100vh;
+  transition: background .3s ease, color .3s ease;
+}
+
+[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 92% 2%, rgba(56, 189, 248, .12), transparent 28rem),
+    radial-gradient(circle at 8% 38%, rgba(52, 211, 153, .10), transparent 30rem),
+    var(--paper);
 }
 
 button, input, select { font: inherit; }
@@ -56,6 +79,31 @@ code { font-family: Consolas, "SFMono-Regular", monospace; }
   position: sticky;
   top: 0;
   z-index: 20;
+  transition: background .3s ease, border-color .3s ease;
+}
+
+[data-theme="dark"] .topbar {
+  background: rgba(15, 23, 42, .85);
+  border-bottom: 1px solid rgba(45, 59, 83, .7);
+}
+
+[data-theme="dark"] .panel,
+[data-theme="dark"] .account-card,
+[data-theme="dark"] .history-card,
+[data-theme="dark"] .metrics {
+  background: rgba(21, 29, 46, .85);
+  border-color: var(--line);
+}
+
+[data-theme="dark"] .endpoint-box {
+  background: #090d16;
+}
+
+[data-theme="dark"] select,
+[data-theme="dark"] input {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f8fafc;
 }
 
 .brand { display: flex; align-items: center; gap: 12px; color: var(--ink); text-decoration: none; font-weight: 750; letter-spacing: .12em; font-size: 13px; }
@@ -154,16 +202,24 @@ h1 em { color: var(--signal); font-style: italic; }
 .health-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
 .health-dot.warn { background: var(--warn); }
 .health-dot.bad { background: var(--bad); }
-.quota-rings { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 6px; }
-.quota-ring-item { display: flex; align-items: center; gap: 9px; padding: 6px 11px; border-radius: 11px; background: rgba(23, 52, 47, .03); border: 1px solid rgba(23, 52, 47, .07); }
-.ring-svg { width: 32px; height: 32px; transform: rotate(-90deg); flex: 0 0 auto; }
-.ring-bg { fill: none; stroke: rgba(23, 52, 47, .1); stroke-width: 3.8; }
-.ring-fill { fill: none; stroke-width: 3.8; stroke-linecap: round; stroke: var(--good); transition: stroke-dasharray .4s ease; }
-.ring-fill.medium { stroke: var(--warn); }
-.ring-fill.low { stroke: var(--signal); }
+.quota-rings { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 6px; }
+.quota-ring-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px; background: rgba(23, 52, 47, .03); border: 1px solid rgba(23, 52, 47, .07); }
+[data-theme="dark"] .quota-ring-item { background: rgba(255, 255, 255, .03); border-color: rgba(255, 255, 255, .08); }
+.ring-svg { width: 28px; height: 28px; transform: rotate(-90deg); flex: 0 0 auto; }
+.ring-bg { fill: none; stroke: rgba(23, 52, 47, .1); stroke-width: 3.5; }
+[data-theme="dark"] .ring-bg { stroke: rgba(255, 255, 255, .1); }
+.ring-fill { fill: none; stroke-width: 3.5; stroke-linecap: round; stroke: #0284c7; transition: stroke-dasharray .4s ease, stroke .3s ease; }
+.ring-fill.good { stroke: #0284c7; }
+.ring-fill.medium { stroke: #f59e0b; }
+.ring-fill.low { stroke: #ef4444; filter: drop-shadow(0 0 3px rgba(239, 68, 68, 0.45)); }
+
+[data-theme="dark"] .ring-fill.good { stroke: #38bdf8; }
+[data-theme="dark"] .ring-fill.medium { stroke: #fbbf24; }
+[data-theme="dark"] .ring-fill.low { stroke: #f87171; filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.6)); }
+
 .ring-details { display: flex; flex-direction: column; min-width: 0; }
-.ring-percent { font-size: 13px; font-weight: 800; color: var(--ink); line-height: 1.1; font-family: Consolas, monospace; }
-.ring-label { font-size: 9px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; margin-top: 2px; }
+.ring-percent { font-size: 12.5px; font-weight: 800; color: var(--ink); line-height: 1.1; font-family: Consolas, monospace; }
+.ring-label { font-size: 9px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; margin-top: 1px; }
 .account-actions { display: flex; gap: 8px; }
 .account-actions .button { padding: 9px 11px; }
 .quota-meta { border-top: 1px solid var(--line); padding: 9px 26px; color: var(--ink-soft); font-size: 9px; display: flex; justify-content: space-between; }

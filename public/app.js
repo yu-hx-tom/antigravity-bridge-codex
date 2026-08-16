@@ -342,5 +342,37 @@ $("#settingsForm").addEventListener("submit", (event) => {
   runBusy("settings", () => api("/api/settings", { method: "PUT", body: JSON.stringify(body) }), "设置已保存").catch(() => {});
 });
 
+// Theme Toggle Management
+function initTheme() {
+  const saved = localStorage.getItem("ag_bridge_theme");
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const isDark = saved ? saved === "dark" : prefersDark;
+  setTheme(isDark);
+}
+
+function setTheme(isDark) {
+  if (isDark) {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const toggleBtn = $("#themeToggle");
+    if (toggleBtn) toggleBtn.textContent = "☀️ 浅色";
+    localStorage.setItem("ag_bridge_theme", "dark");
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+    const toggleBtn = $("#themeToggle");
+    if (toggleBtn) toggleBtn.textContent = "🌙 深色";
+    localStorage.setItem("ag_bridge_theme", "light");
+  }
+}
+
+const themeBtn = $("#themeToggle");
+if (themeBtn) {
+  themeBtn.addEventListener("click", () => {
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    setTheme(!isDark);
+  });
+}
+
+initTheme();
+
 refresh(true);
 setInterval(() => refresh(false), 4000);
