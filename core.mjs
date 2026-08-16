@@ -59,8 +59,8 @@ debug: false
 logging-to-file: true
 logs-max-total-size-mb: 20
 usage-statistics-enabled: false
-request-retry: 2
-max-retry-interval: 30
+request-retry: 3
+max-retry-interval: 15
 disable-image-generation: "chat"
 
 quota-exceeded:
@@ -77,9 +77,12 @@ model-mapping:
 ${modelMappings}
 
 ws-auth: true
+tcp-keepalive: true
+tcp-keepalive-interval: 10
+
 streaming:
-  keepalive-seconds: 15
-  bootstrap-retries: 1
+  keepalive-seconds: 5
+  bootstrap-retries: 3
 `;
 }
 
