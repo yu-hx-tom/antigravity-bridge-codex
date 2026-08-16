@@ -625,6 +625,7 @@ namespace AntigravityDesktopClient
         private Border settingsOverlay;
         private CheckBox chkSettingsAutoStart;
         private CheckBox chkSettingsStartMinimized;
+        private CheckBox chkSettingsMinimizeOnLaunch;
         private CheckBox chkSettingsFloatingHud;
         private RadioButton rbSettingsCloseTray;
         private RadioButton rbSettingsCloseExit;
@@ -642,6 +643,7 @@ namespace AntigravityDesktopClient
 
         private bool autoStartBoot = false;
         private bool startMinimized = false;
+        private bool minimizeOnCodexLaunch = true;
         private string closeAction = "tray"; // "tray" or "exit"
         private int proxyPort = 8787;
         private string customCodexPath = "";
@@ -1400,10 +1402,22 @@ namespace AntigravityDesktopClient
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = new SolidColorBrush(ColTextMain),
-                Margin = new Thickness(4, 0, 0, 14),
+                Margin = new Thickness(4, 0, 0, 8),
                 Cursor = Cursors.Hand
             };
             modalSp.Children.Add(chkSettingsFloatingHud);
+
+            chkSettingsMinimizeOnLaunch = new CheckBox
+            {
+                Content = " 启动 Codex 后自动最小化主界面到系统托盘",
+                IsChecked = minimizeOnCodexLaunch,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(ColTextMain),
+                Margin = new Thickness(4, 0, 0, 14),
+                Cursor = Cursors.Hand
+            };
+            modalSp.Children.Add(chkSettingsMinimizeOnLaunch);
 
             // Group 2: Network & Proxy Port
             modalSp.Children.Add(new TextBlock { Text = "🌐 网络与端口", FontWeight = FontWeights.Bold, FontSize = 12.5, Foreground = new SolidColorBrush(ColPrimary), Margin = new Thickness(0, 6, 0, 8) });
@@ -1669,6 +1683,10 @@ namespace AntigravityDesktopClient
                         {
                             startMinimized = Convert.ToBoolean(dict["startMinimized"]);
                         }
+                        if (dict.ContainsKey("minimizeOnCodexLaunch"))
+                        {
+                            minimizeOnCodexLaunch = Convert.ToBoolean(dict["minimizeOnCodexLaunch"]);
+                        }
                         if (dict.ContainsKey("showFloatingHud"))
                         {
                             showFloatingHud = Convert.ToBoolean(dict["showFloatingHud"]);
@@ -1701,6 +1719,7 @@ namespace AntigravityDesktopClient
                 dict["theme"] = isDarkMode ? "dark" : "light";
                 dict["autoStartBoot"] = autoStartBoot;
                 dict["startMinimized"] = startMinimized;
+                dict["minimizeOnCodexLaunch"] = minimizeOnCodexLaunch;
                 dict["closeAction"] = closeAction;
                 dict["proxyPort"] = proxyPort;
                 dict["customCodexPath"] = customCodexPath;
@@ -1735,6 +1754,7 @@ namespace AntigravityDesktopClient
                 chkSettingsStartMinimized.IsChecked = startMinimized;
                 chkSettingsStartMinimized.IsEnabled = autoStartBoot;
             }
+            if (chkSettingsMinimizeOnLaunch != null) chkSettingsMinimizeOnLaunch.IsChecked = minimizeOnCodexLaunch;
             if (chkSettingsFloatingHud != null) chkSettingsFloatingHud.IsChecked = showFloatingHud;
             if (rbSettingsCloseTray != null) rbSettingsCloseTray.IsChecked = (closeAction != "exit");
             if (rbSettingsCloseExit != null) rbSettingsCloseExit.IsChecked = (closeAction == "exit");
@@ -1763,6 +1783,7 @@ namespace AntigravityDesktopClient
         {
             autoStartBoot = chkSettingsAutoStart != null && chkSettingsAutoStart.IsChecked == true;
             startMinimized = chkSettingsStartMinimized != null && chkSettingsStartMinimized.IsChecked == true;
+            minimizeOnCodexLaunch = chkSettingsMinimizeOnLaunch == null || chkSettingsMinimizeOnLaunch.IsChecked == true;
             closeAction = (rbSettingsCloseExit != null && rbSettingsCloseExit.IsChecked == true) ? "exit" : "tray";
 
             bool newFloatingHud = chkSettingsFloatingHud != null && chkSettingsFloatingHud.IsChecked == true;
@@ -2990,19 +3011,30 @@ namespace AntigravityDesktopClient
                     if (string.IsNullOrEmpty(selModel)) selModel = "gemini-3.7-flash-high";
 
                     SendApiPost("api/codex/launch", "{\"model\":\"" + selModel + "\"}");
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke(new Action(() =>
                     {
                         txtCodexStatus.Text = "Codex 桌面端已启动！关闭 Codex 窗口后将自动无感恢复官方配置。";
                         btnLaunchCodex.IsEnabled = true;
-                    });
+
+                        if (minimizeOnCodexLaunch)
+                        {
+                            WindowState = WindowState.Minimized;
+                            Hide();
+                            if (!CheckHasShownTrayTipPersisted())
+                            {
+                                trayIcon.ShowBalloonTip(2000, "Antigravity Bridge Codex", "Codex 已启动接管，ABC 主界面已自动最小化至系统托盘后台运行。", System.Windows.Forms.ToolTipIcon.Info);
+                                MarkTrayTipShownPersisted();
+                            }
+                        }
+                    }));
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke(new Action(() =>
                     {
                         txtCodexStatus.Text = "启动失败: " + ex.Message;
                         btnLaunchCodex.IsEnabled = true;
-                    });
+                    }));
                 }
             });
         }
