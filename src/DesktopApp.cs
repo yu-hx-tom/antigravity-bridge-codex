@@ -234,9 +234,13 @@ namespace AntigravityDesktopClient
         private Border pillBorder;
         private TextBlock txtTps;
         private TextBlock txtTtft;
+        private TextBlock dividerBlock;
         private bool isDockedLeft = false;
         private bool isDockedRight = false;
         private bool isDragging = false;
+        private bool isDarkTheme = false;
+        private double lastTps = 0;
+        private int lastTtft = 0;
 
         public Action OpenMainWindowAction;
         public Action OpenSettingsAction;
@@ -260,19 +264,10 @@ namespace AntigravityDesktopClient
 
             pillBorder = new Border
             {
-                Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(235, 15, 23, 42)),
-                BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(190, 56, 189, 248)),
                 BorderThickness = new Thickness(1.2),
                 CornerRadius = new CornerRadius(18),
                 Padding = new Thickness(12, 0, 12, 0),
-                Cursor = Cursors.SizeAll,
-                Effect = new DropShadowEffect
-                {
-                    Color = System.Windows.Media.Color.FromRgb(0, 0, 0),
-                    BlurRadius = 16,
-                    Opacity = 0.45,
-                    ShadowDepth = 2
-                }
+                Cursor = Cursors.SizeAll
             };
 
             Grid grid = new Grid();
@@ -288,7 +283,6 @@ namespace AntigravityDesktopClient
                 Text = "-- t/s",
                 FontSize = 11.5,
                 FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184)),
                 VerticalAlignment = VerticalAlignment.Center
             };
             spTps.Children.Add(txtTps);
@@ -296,16 +290,15 @@ namespace AntigravityDesktopClient
             grid.Children.Add(spTps);
 
             // Divider
-            TextBlock divider = new TextBlock
+            dividerBlock = new TextBlock
             {
                 Text = "|",
                 FontSize = 10,
-                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromArgb(120, 71, 85, 105)),
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 4, 0)
             };
-            Grid.SetColumn(divider, 1);
-            grid.Children.Add(divider);
+            Grid.SetColumn(dividerBlock, 1);
+            grid.Children.Add(dividerBlock);
 
             // TTFT Column
             StackPanel spTtft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
@@ -315,7 +308,6 @@ namespace AntigravityDesktopClient
                 Text = "-- ms",
                 FontSize = 11.5,
                 FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184)),
                 VerticalAlignment = VerticalAlignment.Center
             };
             spTtft.Children.Add(txtTtft);
@@ -324,6 +316,8 @@ namespace AntigravityDesktopClient
 
             pillBorder.Child = grid;
             Content = pillBorder;
+
+            ApplyTheme(false);
 
             // Events
             MouseLeftButtonDown += (s, e) =>
@@ -414,6 +408,48 @@ namespace AntigravityDesktopClient
             ContextMenu = cm;
         }
 
+        public void ApplyTheme(bool isDark)
+        {
+            this.isDarkTheme = isDark;
+            Dispatcher.Invoke(() =>
+            {
+                if (pillBorder != null)
+                {
+                    if (isDark)
+                    {
+                        pillBorder.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(235, 15, 23, 42));
+                        pillBorder.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(190, 56, 189, 248));
+                        pillBorder.Effect = new DropShadowEffect
+                        {
+                            Color = System.Windows.Media.Color.FromRgb(0, 0, 0),
+                            BlurRadius = 16,
+                            Opacity = 0.45,
+                            ShadowDepth = 2
+                        };
+                    }
+                    else
+                    {
+                        pillBorder.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(245, 255, 255, 255));
+                        pillBorder.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(220, 203, 213, 225));
+                        pillBorder.Effect = new DropShadowEffect
+                        {
+                            Color = System.Windows.Media.Color.FromRgb(15, 23, 42),
+                            BlurRadius = 12,
+                            Opacity = 0.12,
+                            ShadowDepth = 2
+                        };
+                    }
+                }
+
+                if (dividerBlock != null)
+                {
+                    dividerBlock.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromArgb(120, 71, 85, 105) : System.Windows.Media.Color.FromArgb(140, 203, 213, 225));
+                }
+
+                UpdateTelemetry(lastTps, lastTtft);
+            });
+        }
+
         public void CheckDocking()
         {
             if (isDragging) return;
@@ -483,28 +519,30 @@ namespace AntigravityDesktopClient
 
         public void UpdateTelemetry(double tps, int ttft)
         {
+            lastTps = tps;
+            lastTtft = ttft;
             Dispatcher.Invoke(() =>
             {
                 if (tps > 0)
                 {
                     txtTps.Text = string.Format("{0:0.0} t/s", tps);
-                    txtTps.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(56, 189, 248));
+                    txtTps.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(56, 189, 248) : System.Windows.Media.Color.FromRgb(37, 99, 235));
                 }
                 else
                 {
                     txtTps.Text = "-- t/s";
-                    txtTps.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184));
+                    txtTps.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(100, 116, 139));
                 }
 
                 if (ttft > 0)
                 {
                     txtTtft.Text = string.Format("{0} ms", ttft);
-                    txtTtft.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(52, 211, 153));
+                    txtTtft.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(52, 211, 153) : System.Windows.Media.Color.FromRgb(5, 150, 105));
                 }
                 else
                 {
                     txtTtft.Text = "-- ms";
-                    txtTtft.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(148, 163, 184));
+                    txtTtft.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(100, 116, 139));
                 }
             });
         }
@@ -1646,6 +1684,10 @@ namespace AntigravityDesktopClient
             SaveUiPreferences();
             BuildUI();
             FetchDashboardData();
+            if (floatingHud != null)
+            {
+                floatingHud.ApplyTheme(isDarkMode);
+            }
             ShowToast(isDarkMode ? "🌙 已切换为 Slate 深色模式" : "☀️ 已切换为极简浅色模式");
         }
 
@@ -1759,6 +1801,7 @@ namespace AntigravityDesktopClient
                         floatingHud.Top = SystemParameters.WorkArea.Top + 80;
                     }
                 }
+                floatingHud.ApplyTheme(isDarkMode);
                 floatingHud.Show();
                 floatingHud.CheckDocking();
             }
