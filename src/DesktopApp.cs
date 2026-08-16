@@ -28,28 +28,26 @@ namespace AntigravityDesktopClient
     public class ModelPickerControl : Border
     {
         private TextBlock txtDisplay;
+        private TextBlock arrow;
         private Popup popup;
+        private Border popupBorder;
         private StackPanel popupList;
         public string SelectedModelId { get; private set; }
         public event Action<string> ModelSelected;
 
-        private readonly System.Windows.Media.Color ColPrimary = System.Windows.Media.Color.FromRgb(37, 99, 235);   // #2563EB
-        private readonly System.Windows.Media.Color ColPrimaryLight = System.Windows.Media.Color.FromRgb(239, 246, 255); // #EFF6FF
-        private readonly System.Windows.Media.Color ColBorder = System.Windows.Media.Color.FromRgb(226, 232, 240); // #E2E8F0
-        private readonly System.Windows.Media.Color ColTextMain = System.Windows.Media.Color.FromRgb(15, 23, 42);  // #0F172A
+        private bool isDark = false;
+        private System.Windows.Media.Color ColPrimary { get { return isDark ? System.Windows.Media.Color.FromRgb(56, 189, 248) : System.Windows.Media.Color.FromRgb(37, 99, 235); } }
+        private System.Windows.Media.Color ColPrimaryLight { get { return isDark ? System.Windows.Media.Color.FromRgb(30, 58, 95) : System.Windows.Media.Color.FromRgb(239, 246, 255); } }
+        private System.Windows.Media.Color ColBorder { get { return isDark ? System.Windows.Media.Color.FromRgb(45, 59, 83) : System.Windows.Media.Color.FromRgb(226, 232, 240); } }
+        private System.Windows.Media.Color ColBg { get { return isDark ? System.Windows.Media.Color.FromRgb(21, 29, 46) : System.Windows.Media.Color.FromRgb(255, 255, 255); } }
+        private System.Windows.Media.Color ColTextMain { get { return isDark ? System.Windows.Media.Color.FromRgb(248, 250, 252) : System.Windows.Media.Color.FromRgb(15, 23, 42); } }
 
         private List<KeyValuePair<string, string>> cachedModels = new List<KeyValuePair<string, string>>();
         private string cachedModelHash = "";
 
         public ModelPickerControl()
         {
-            Background = System.Windows.Media.Brushes.White;
-            BorderBrush = new SolidColorBrush(ColPrimary);
-            BorderThickness = new Thickness(1.5);
-            CornerRadius = new CornerRadius(8);
-            Padding = new Thickness(14, 8, 14, 8);
-            Cursor = Cursors.Hand;
-            Width = 270;
+            ApplyThemeStyles();
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
@@ -70,7 +68,7 @@ namespace AntigravityDesktopClient
             Grid.SetColumn(txtDisplay, 0);
             grid.Children.Add(txtDisplay);
 
-            TextBlock arrow = new TextBlock
+            arrow = new TextBlock
             {
                 Text = "▾",
                 FontSize = 14,
@@ -91,16 +89,16 @@ namespace AntigravityDesktopClient
                 AllowsTransparency = true
             };
 
-            Border popupBorder = new Border
+            popupBorder = new Border
             {
-                Background = System.Windows.Media.Brushes.White,
+                Background = new SolidColorBrush(ColBg),
                 BorderBrush = new SolidColorBrush(ColBorder),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(10),
                 Padding = new Thickness(6),
                 Width = 270,
                 Margin = new Thickness(0, 4, 0, 0),
-                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 20, Opacity = 0.12, ShadowDepth = 4 }
+                Effect = new DropShadowEffect { Color = System.Windows.Media.Color.FromRgb(15, 23, 42), BlurRadius = 20, Opacity = 0.2, ShadowDepth = 4 }
             };
 
             popupList = new StackPanel();
@@ -111,6 +109,33 @@ namespace AntigravityDesktopClient
             {
                 popup.IsOpen = !popup.IsOpen;
             };
+        }
+
+        public void SetTheme(bool darkMode)
+        {
+            isDark = darkMode;
+            ApplyThemeStyles();
+            cachedModelHash = "";
+            if (cachedModels.Count > 0) SetModels(cachedModels, SelectedModelId);
+        }
+
+        public void ApplyThemeStyles()
+        {
+            Background = new SolidColorBrush(ColBg);
+            BorderBrush = new SolidColorBrush(ColPrimary);
+            BorderThickness = new Thickness(1.5);
+            CornerRadius = new CornerRadius(8);
+            Padding = new Thickness(14, 8, 14, 8);
+            Cursor = Cursors.Hand;
+            Width = 270;
+
+            if (txtDisplay != null) txtDisplay.Foreground = new SolidColorBrush(ColPrimary);
+            if (arrow != null) arrow.Foreground = new SolidColorBrush(ColPrimary);
+            if (popupBorder != null)
+            {
+                popupBorder.Background = new SolidColorBrush(ColBg);
+                popupBorder.BorderBrush = new SolidColorBrush(ColBorder);
+            }
         }
 
         public void SetModels(List<KeyValuePair<string, string>> models, string currentId)
@@ -241,6 +266,7 @@ namespace AntigravityDesktopClient
         private DispatcherTimer toastTimer;
 
         // Theme Controls
+        private Grid rootGrid;
         private Border topBarBorder;
         private Border footerBorder;
         private ScrollViewer mainScroll;
@@ -390,8 +416,6 @@ namespace AntigravityDesktopClient
             MinWidth = 960;
             MinHeight = 660;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            Background = new SolidColorBrush(ColBg);
-            Foreground = new SolidColorBrush(ColTextMain);
             FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI, sans-serif");
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
@@ -400,7 +424,22 @@ namespace AntigravityDesktopClient
             TextOptions.SetTextHintingMode(this, TextHintingMode.Fixed);
             RenderOptions.SetClearTypeHint(this, ClearTypeHint.Enabled);
 
-            Grid rootGrid = new Grid();
+            rootGrid = new Grid();
+            Content = rootGrid;
+
+            BuildUI();
+
+            StateChanged += MainWindow_StateChanged;
+            Closing += MainWindow_Closing;
+        }
+
+        private void BuildUI()
+        {
+            Background = new SolidColorBrush(ColBg);
+            Foreground = new SolidColorBrush(ColTextMain);
+
+            rootGrid.Children.Clear();
+            rootGrid.RowDefinitions.Clear();
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(68) });  // Topbar
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Main Content
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });  // Footer
@@ -460,12 +499,12 @@ namespace AntigravityDesktopClient
             };
             txtTopStatus = new TextBlock { Text = "核心服务在线 (127.0.0.1:8787)", FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
             
-            btnToggleTheme = CreateButton("🌙 深色", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
+            btnToggleTheme = CreateButton(isDarkMode ? "☀️ 浅色" : "🌙 深色", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
             btnToggleTheme.Padding = new Thickness(12, 6, 12, 6);
             btnToggleTheme.Margin = new Thickness(0, 0, 10, 0);
             btnToggleTheme.Click += (s, e) => ToggleTheme();
 
-            btnToggleCore = CreateButton("停止服务", ColCardMuted, new SolidColorBrush(ColTextMain), 12);
+            btnToggleCore = CreateButton(isCoreRunning ? "停止服务" : "启动核心", ColCardMuted, new SolidColorBrush(ColTextMain), 12);
             btnToggleCore.Padding = new Thickness(14, 6, 14, 6);
             btnToggleCore.Click += (s, e) => ToggleCoreService();
 
@@ -491,8 +530,8 @@ namespace AntigravityDesktopClient
             metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            metricsGrid.Children.Add(CreateMetricCard("CORE", "ON", "CLIProxyAPI 核心", 0, out txtMetricCore));
-            metricsGrid.Children.Add(CreateMetricCard("ACCOUNTS", "1", "已挂载凭据", 1, out txtMetricAccounts));
+            metricsGrid.Children.Add(CreateMetricCard("CORE", isCoreRunning ? "ON" : "OFF", "CLIProxyAPI 核心", 0, out txtMetricCore));
+            metricsGrid.Children.Add(CreateMetricCard("ACCOUNTS", "0", "已挂载凭据", 1, out txtMetricAccounts));
             metricsGrid.Children.Add(CreateMetricCard("THROUGHPUT", "--", "实时吞吐均速", 2, out txtMetricThroughput));
             metricsGrid.Children.Add(CreateMetricCard("LATENCY", "--", "首字延迟 TTFT", 3, out txtMetricLatency));
             body.Children.Add(metricsGrid);
@@ -525,7 +564,7 @@ namespace AntigravityDesktopClient
                 Padding = new Thickness(8, 3, 8, 3),
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            txtMode = new TextBlock { Text = "🔒 官方原生模式", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 83, 9)) };
+            txtMode = new TextBlock { Text = "🔒 官方原生模式", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(isDarkMode ? System.Windows.Media.Color.FromRgb(251, 191, 36) : System.Windows.Media.Color.FromRgb(180, 83, 9)) };
             badgeMode.Child = txtMode;
             badgeRow.Children.Add(badgeMode);
 
@@ -568,6 +607,7 @@ namespace AntigravityDesktopClient
             modelRow.Children.Add(new TextBlock { Text = "生效模型：", FontSize = 12.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center });
             
             modelPicker = new ModelPickerControl { Margin = new Thickness(0, 0, 12, 0) };
+            modelPicker.SetTheme(isDarkMode);
             modelPicker.ModelSelected += (modelId) => OnModelSelected(modelId);
             modelRow.Children.Add(modelPicker);
 
@@ -658,7 +698,7 @@ namespace AntigravityDesktopClient
             StackPanel accActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             
             // Round-Robin Mode Switch Button
-            btnToggleRoundRobin = CreateButton("🔄 自动轮询: 开启", ColPrimaryLight, new SolidColorBrush(ColPrimaryDark), 11.5, true);
+            btnToggleRoundRobin = CreateButton(autoRoundRobin ? "🔄 自动轮询: 开启" : "🎯 手动指定: 开启", ColPrimaryLight, new SolidColorBrush(ColPrimaryDark), 11.5, true);
             btnToggleRoundRobin.Padding = new Thickness(12, 5, 12, 5);
             btnToggleRoundRobin.Margin = new Thickness(0, 0, 8, 0);
             btnToggleRoundRobin.Click += (s, e) => ToggleRoundRobinMode();
@@ -759,11 +799,6 @@ namespace AntigravityDesktopClient
             toastSp.Children.Add(txtToastMessage);
             toastContainer.Child = toastSp;
             rootGrid.Children.Add(toastContainer);
-
-            Content = rootGrid;
-
-            StateChanged += MainWindow_StateChanged;
-            Closing += MainWindow_Closing;
         }
 
         private void ShowToast(string message)
@@ -850,24 +885,7 @@ namespace AntigravityDesktopClient
         private void ToggleTheme()
         {
             isDarkMode = !isDarkMode;
-            if (btnToggleTheme != null)
-            {
-                btnToggleTheme.Content = isDarkMode ? "☀️ 浅色" : "🌙 深色";
-                btnToggleTheme.Background = new SolidColorBrush(ColCardMuted);
-                btnToggleTheme.Foreground = new SolidColorBrush(ColTextMain);
-            }
-            this.Background = new SolidColorBrush(ColBg);
-            this.Foreground = new SolidColorBrush(ColTextMain);
-            if (topBarBorder != null)
-            {
-                topBarBorder.Background = new SolidColorBrush(ColCard);
-                topBarBorder.BorderBrush = new SolidColorBrush(ColBorder);
-            }
-            if (footerBorder != null)
-            {
-                footerBorder.Background = new SolidColorBrush(ColCard);
-                footerBorder.BorderBrush = new SolidColorBrush(ColBorder);
-            }
+            BuildUI();
             FetchDashboardData();
             ShowToast(isDarkMode ? "🌙 已切换为 Slate 深色模式" : "☀️ 已切换为极简浅色模式");
         }
@@ -1151,7 +1169,7 @@ namespace AntigravityDesktopClient
                 badgeMode.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 245, 158, 11));
                 badgeMode.BorderBrush = new SolidColorBrush(ColAmber);
                 txtMode.Text = "🔒 官方原生模式";
-                txtMode.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 83, 9));
+                txtMode.Foreground = new SolidColorBrush(isDarkMode ? ColAmber : System.Windows.Media.Color.FromRgb(180, 83, 9));
             }
 
             // Real-time Session Telemetry (Throughput & Latency)
@@ -1230,7 +1248,7 @@ namespace AntigravityDesktopClient
             else
             {
                 btnToggleRoundRobin.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 245, 158, 11));
-                btnToggleRoundRobin.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 83, 9));
+                btnToggleRoundRobin.Foreground = new SolidColorBrush(isDarkMode ? ColAmber : System.Windows.Media.Color.FromRgb(180, 83, 9));
                 btnToggleRoundRobin.Content = "🎯 手动指定: 开启";
                 btnToggleRoundRobin.ToolTip = "当前为手动指定账号模式，仅选中的单账号处理请求。点击可切换回自动轮询。";
             }
