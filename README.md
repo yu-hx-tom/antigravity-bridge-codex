@@ -27,6 +27,13 @@
    - 采用多文件快照与 SHA-256 校验和机制，确保退出或异常中断时 100% 自动恢复用户原生配置；
    - 工具调用（Tool Calling / Functions）Protobuf 关键字清洗，抹平 Gemini 与 OpenAI Codex 协议差异。
 
+5. **西游云多出口与账号固定出口**：
+   - 每个已选节点生成一个仅监听 `127.0.0.1` 的 Mihomo `mixed` Listener（从 `7892` 起连续分配），Listener 的 `proxy` 字段固定到唯一节点，不使用负载均衡；
+   - 自定义美国住宅 ISP 自动生成代理项，并通过 `dialer-proxy` 绑定到真实的新加坡 IEPL/IPLC/专线节点，形成“国内 → 新加坡专线 → 美国住宅落地”；
+   - OAuth 账号保存独立的 `proxy_url`，专属端口未监听时禁止回退到默认端口，避免账号出口串线；
+   - 只有已绑定独立 Listener 的节点才显示“通道全链路”实测值；未激活节点明确显示暂无数据，不再把国内 BGP 入口的 2–4ms 冒充节点延迟；
+   - 官网登录会自动拉取订阅且不保存密码；失败时从 `%APPDATA%\com.appshub\XiyouYun\shared_preferences.json` 中读取本机登录会话的订阅地址兜底。
+
 ---
 
 ## 🏗️ 架构概览
@@ -70,11 +77,13 @@
 | **`protocol.mjs`** | **协议层转换**：Antigravity ↔ Codex 协议转换、工具 Schema 清洗过滤、思维链（Thought）签名保护。 |
 | **`transaction.mjs`**| **事务保护模块**：Codex 配置文件快照捕获、原子写入、SHA-256 完整性校验、崩溃自动回滚。 |
 | **`history.mjs`** | **任务历史审计**：以只读模式安全解析 Codex 本地 SQLite 与 Session 任务元数据。 |
+| **`subscription.mjs`** | **节点与出口规划**：订阅解析、地区过滤、节点评分、Listener 端口规划及 `dialer-proxy` 链式配置生成。 |
 | **`src/DesktopApp.cs`**| **Windows 原生客户端源码**：纯 C# WPF 桌面控制台，包含抗锯齿 UI、单实例锁、托盘、测速卡片。 |
 | **`src/app.manifest`**| **应用清单**：声明 Windows 10/11 `PerMonitorV2` 高 DPI 感知，根治字体模糊。 |
 | **`scripts/build-exe.mjs`** | **发布构建脚本**：自动化调用 `csc.exe` 编译桌面 GUI，组装单机便携免安装发行包。 |
+| **`scripts/inject-xiyou-script.mjs`** | **西游云脚本注入工具**：备份偏好设置后，将多 Listener 与链式代理覆写脚本写入当前脚本槽。 |
 | **`public/`** | **Web 管理前端**：原生 HTML5/CSS3/ES6 现代化响应式控制面板（供浏览器访问）。 |
-| **`test/*.test.mjs`** | **自动化测试套件**：涵盖 21 项全覆盖单元与集成测试（配置、事务、恢复、协议、配额）。 |
+| **`test/*.test.mjs`** | **自动化测试套件**：覆盖配置、事务、恢复、协议、配额、订阅解析与链式代理生成。 |
 | **`dist/AntigravityCodexBridge/`** | **最终交付物**：绿色独立运行目录，包含 `AntigravityCodexBridge.exe` 与所需运行资源。 |
 
 ---
@@ -107,7 +116,7 @@
 ### 常用命令
 
 ```powershell
-# 1. 运行全部自动化测试 (21 项测试)
+# 1. 运行全部自动化测试
 npm test
 
 # 2. 语法与静态代码检查

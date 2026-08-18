@@ -22,7 +22,6 @@ console.log("=== Building Antigravity Codex Bridge Standalone Package ===");
 // 1. Clean and prepare output directories
 try {
   execSync("taskkill /F /IM AntigravityCodexBridge.exe /T 2>nul || (exit 0)", { stdio: "ignore", shell: "cmd.exe" });
-  execSync("wmic process where \"name='node.exe' and commandline like '%server.mjs%'\" call terminate 2>nul || (exit 0)", { stdio: "ignore", shell: "cmd.exe" });
 } catch {}
 
 try {
@@ -46,6 +45,7 @@ const appFiles = [
   "protocol.mjs",
   "transaction.mjs",
   "history.mjs",
+  "subscription.mjs",
   "package.json",
   "cliproxy.lock.json",
   "launch-codex-api-service.ps1",
@@ -77,9 +77,13 @@ if (fsSync.existsSync(cscPath) && fsSync.existsSync(desktopCsPath)) {
     console.log(" Native Desktop GUI Client compiled successfully!");
     await fs.copyFile(targetExePath, path.join(DIST, "AntigravityCodexBridge.exe"));
   } catch (err) {
-    console.warn(" Warning: Could not compile Desktop .EXE:", err.message);
+    throw new Error(`Could not compile Desktop .EXE: ${err.message}`);
   }
+} else {
+  throw new Error(`Missing C# compiler or desktop source: ${cscPath}`);
 }
+
+if (!fsSync.existsSync(targetExePath)) throw new Error("Desktop compiler completed without producing the EXE");
 
 // 5. Create Batch Fallback Launchers
 console.log("Creating standalone Windows Launchers...");

@@ -336,7 +336,7 @@ namespace AntigravityDesktopClient
 
             // TPS Column
             StackPanel spTps = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-            
+
             iconBolt = new System.Windows.Shapes.Path
             {
                 Data = Geometry.Parse("M 4.5 0 L 0.5 6.5 L 4 6.5 L 3 11.5 L 8.5 4.5 L 5 4.5 Z"),
@@ -373,7 +373,7 @@ namespace AntigravityDesktopClient
 
             // TTFT Column
             StackPanel spTtft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-            
+
             iconTimer = new System.Windows.Shapes.Path
             {
                 Data = Geometry.Parse("M 4 0 L 7 0 L 7 1.2 L 4 1.2 Z M 5.5 1.8 C 2.5 1.8 0 4.3 0 7.3 C 0 10.3 2.5 12.8 5.5 12.8 C 8.5 12.8 11 10.3 11 7.3 C 11 4.3 8.5 1.8 5.5 1.8 Z M 5.5 3 C 7.9 3 9.8 4.9 9.8 7.3 C 9.8 9.7 7.9 11.6 5.5 11.6 C 3.1 11.6 1.2 9.7 1.2 7.3 C 1.2 4.9 3.1 3 5.5 3 Z M 4.8 4.2 L 4.8 7.5 L 7.5 8.8 L 8 7.7 L 6 6.7 L 6 4.2 Z"),
@@ -774,6 +774,40 @@ namespace AntigravityDesktopClient
         private TextBlock txtToastMessage;
         private DispatcherTimer toastTimer;
 
+        // Navigation & Dedicated Proxy Page Controls
+        private string currentView = "dashboard";
+        private Button btnNavDashboard;
+        private Button btnNavProxySettings;
+        private ScrollViewer proxySettingsScroll;
+        private RadioButton rbProxyModeDefault;
+        private RadioButton rbProxyModeIsolated;
+        private TextBox txtProxySubUrl;
+        private List<Dictionary<string, object>> customSingleNodes = new List<Dictionary<string, object>>();
+        private StackPanel panelCustomNodesList;
+        private TextBox txtNewNodeInput;
+        private TextBox txtNewNodeName;
+        private Button btnAddCustomNode;
+        private RadioButton rbImportSubLink;
+        private RadioButton rbImportAccount;
+        private StackPanel panelImportSubLink;
+        private StackPanel panelImportAccount;
+        private TextBox txtProxyApiBaseUrl;
+        private TextBox txtProxyAccountEmail;
+        private PasswordBox txtProxyAccountPassword;
+        private StackPanel panelEgressCards;
+        private TextBlock txtProxySyncStatus;
+        private Border cardNodeSelector;
+        private TextBlock txtNodeSelectorSummary;
+        private StackPanel panelAvailableNodesList;
+        private Button btnConfirmSelectedNodes;
+        private List<Dictionary<string, object>> currentFetchedNodes = new List<Dictionary<string, object>>();
+        private List<CheckBox> nodeCheckBoxes = new List<CheckBox>();
+        private Dictionary<string, int> nodeLatencies = new Dictionary<string, int>();
+        private Dictionary<string, int> egressLatencies = new Dictionary<string, int>();
+        private Dictionary<string, string> nodeLatencyLabels = new Dictionary<string, string>();
+        private Dictionary<string, string> egressLatencyLabels = new Dictionary<string, string>();
+        private ArrayList currentEgressPlanList = new ArrayList();
+
         // Settings Modal Controls & State
         private Border settingsOverlay;
         private CheckBox chkSettingsAutoStart;
@@ -1003,7 +1037,7 @@ namespace AntigravityDesktopClient
 
             trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("🚀 启动 Codex", null, (s, e) => LaunchCodexService()) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
             trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("🛡️ 恢复官方配置", null, (s, e) => RestoreOfficialConfig()) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
-            
+
             trayModelsMenu = new System.Windows.Forms.ToolStripMenuItem("🤖 快速切换生效模型") { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) };
             var dropDownMenu = trayModelsMenu.DropDown as System.Windows.Forms.ToolStripDropDownMenu;
             if (dropDownMenu != null)
@@ -1082,46 +1116,40 @@ namespace AntigravityDesktopClient
 
             // Brand App Icon Image
             StackPanel brandPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            
+
             Border logoContainer = new Border
             {
-                Width = 40,
-                Height = 40,
-                CornerRadius = new CornerRadius(10),
+                Width = 36,
+                Height = 36,
+                CornerRadius = new CornerRadius(9),
                 Margin = new Thickness(0, 0, 12, 0),
-                Effect = new DropShadowEffect { Color = ColPrimary, BlurRadius = 10, Opacity = 0.25, ShadowDepth = 1 }
+                Effect = new DropShadowEffect { Color = ColPrimary, BlurRadius = 8, Opacity = 0.25, ShadowDepth = 1 }
             };
             System.Windows.Controls.Image logoImg = new System.Windows.Controls.Image
             {
                 Source = GenerateWpfIconSource(64),
-                Width = 40,
-                Height = 40
+                Width = 36,
+                Height = 36
             };
             RenderOptions.SetBitmapScalingMode(logoImg, BitmapScalingMode.HighQuality);
             logoContainer.Child = logoImg;
             brandPanel.Children.Add(logoContainer);
 
-            StackPanel titleGroup = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            StackPanel titleLine = new StackPanel { Orientation = Orientation.Horizontal };
-            titleLine.Children.Add(new TextBlock { Text = "Antigravity Bridge Codex", FontWeight = FontWeights.Bold, FontSize = 16.5, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 8, 0) });
-            
-            Border badgeAbc = new Border
-            {
-                Background = new SolidColorBrush(ColPrimaryLight),
-                BorderBrush = new SolidColorBrush(ColPrimary),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(5, 1, 5, 1),
-                Margin = new Thickness(0, 0, 8, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            badgeAbc.Child = new TextBlock { Text = "ABC", FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
-            titleLine.Children.Add(badgeAbc);
+            // Navigation Tabs (仪表盘 vs 代理配置)
+            StackPanel navPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
 
-            titleLine.Children.Add(new TextBlock { Text = "v0.2.2", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColPrimary), VerticalAlignment = VerticalAlignment.Center });
-            titleGroup.Children.Add(titleLine);
-            titleGroup.Children.Add(new TextBlock { Text = "LOCAL RUNTIME · 127.0.0.1 ONLY · ZERO DB CONTAMINATION", FontSize = 10, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMuted) });
-            brandPanel.Children.Add(titleGroup);
+            btnNavDashboard = CreateButton("🏠 仪表盘", ColPrimaryLight, new SolidColorBrush(ColPrimaryDark), 11.5, true);
+            btnNavDashboard.Padding = new Thickness(12, 5, 12, 5);
+            btnNavDashboard.Margin = new Thickness(0, 0, 6, 0);
+            btnNavDashboard.Click += (s, e) => SwitchToView("dashboard");
+            navPanel.Children.Add(btnNavDashboard);
+
+            btnNavProxySettings = CreateButton("🌐 代理配置", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
+            btnNavProxySettings.Padding = new Thickness(12, 5, 12, 5);
+            btnNavProxySettings.Click += (s, e) => SwitchToView("proxy");
+            navPanel.Children.Add(btnNavProxySettings);
+
+            brandPanel.Children.Add(navPanel);
             Grid.SetColumn(brandPanel, 0);
             topGrid.Children.Add(brandPanel);
 
@@ -1135,7 +1163,7 @@ namespace AntigravityDesktopClient
                 Margin = new Thickness(0, 0, 8, 0)
             };
             txtTopStatus = new TextBlock { Text = "核心服务在线 (127.0.0.1:8787)", FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
-            
+
             btnToggleTheme = CreateButton(isDarkMode ? "☀️ 浅色" : "🌙 深色", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
             btnToggleTheme.Padding = new Thickness(12, 6, 12, 6);
             btnToggleTheme.Margin = new Thickness(0, 0, 8, 0);
@@ -1195,7 +1223,7 @@ namespace AntigravityDesktopClient
             heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(270) });
 
             StackPanel heroLeft = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            
+
             // Kicker Badges
             StackPanel badgeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
             badgeMode = new Border
@@ -1248,7 +1276,7 @@ namespace AntigravityDesktopClient
             // Model Switcher Line
             StackPanel modelRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             modelRow.Children.Add(new TextBlock { Text = "生效模型：", FontSize = 12.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center });
-            
+
             modelPicker = new ModelPickerControl { Margin = new Thickness(0, 0, 12, 0) };
             modelPicker.SetTheme(isDarkMode);
             modelPicker.ModelSelected += (modelId) => OnModelSelected(modelId);
@@ -1273,7 +1301,7 @@ namespace AntigravityDesktopClient
             ControlTemplate btnTemplate = new ControlTemplate(typeof(Button));
             FrameworkElementFactory borderFactory = new FrameworkElementFactory(typeof(Border));
             borderFactory.SetValue(Border.CornerRadiusProperty, new CornerRadius(12));
-            
+
             System.Windows.Media.LinearGradientBrush btnGradient = new System.Windows.Media.LinearGradientBrush(
                 ColPrimary,
                 ColPrimaryDark,
@@ -1339,7 +1367,7 @@ namespace AntigravityDesktopClient
             accHeaderGrid.Children.Add(accTitleGroup);
 
             StackPanel accActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            
+
             // Round-Robin Mode Switch Button
             btnToggleRoundRobin = CreateButton(autoRoundRobin ? "🔄 自动轮询: 开启" : "🎯 手动指定: 开启", ColPrimaryLight, new SolidColorBrush(ColPrimaryDark), 11.5, true);
             btnToggleRoundRobin.Padding = new Thickness(12, 5, 12, 5);
@@ -1355,7 +1383,7 @@ namespace AntigravityDesktopClient
             Button btnAddAccount = CreateButton("+ 登录 Google 账号", ColPrimary, System.Windows.Media.Brushes.White, 11.5, true);
             btnAddAccount.Padding = new Thickness(14, 5, 14, 5);
             btnAddAccount.Margin = new Thickness(8, 0, 0, 0);
-            btnAddAccount.Click += (s, e) => StartOAuthLogin();
+            btnAddAccount.Click += (s, e) => ShowProxyNodeSelectorDialog();
             accActions.Children.Add(btnAddAccount);
 
             Grid.SetColumn(accActions, 1);
@@ -1369,6 +1397,10 @@ namespace AntigravityDesktopClient
             mainScroll.Content = body;
             Grid.SetRow(mainScroll, 1);
             rootGrid.Children.Add(mainScroll);
+
+            proxySettingsScroll = BuildProxySettingsView();
+            Grid.SetRow(proxySettingsScroll, 1);
+            rootGrid.Children.Add(proxySettingsScroll);
 
             // 3. FOOTER
             footerBorder = new Border
@@ -2105,7 +2137,7 @@ namespace AntigravityDesktopClient
                     string mName = item.Value;
                     bool isChecked = (mId == currentModel);
                     string menuText = (isChecked ? "✓ " : "    ") + mName;
-                    
+
                     System.Windows.Forms.ToolStripMenuItem mItem = new System.Windows.Forms.ToolStripMenuItem(menuText);
                     mItem.Margin = new System.Windows.Forms.Padding(0, 1, 0, 1);
                     if (isChecked)
@@ -2376,10 +2408,25 @@ namespace AntigravityDesktopClient
             {
                 os.Write(bytes, 0, bytes.Length);
             }
-            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
-            using (StreamReader reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+            try
             {
-                return reader.ReadToEnd();
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (StreamReader reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                {
+                    return reader.ReadToEnd();
+                }
+            }
+            catch (WebException webEx)
+            {
+                if (webEx.Response != null)
+                {
+                    using (StreamReader reader = new StreamReader(webEx.Response.GetResponseStream(), Encoding.UTF8))
+                    {
+                        string errBody = reader.ReadToEnd();
+                        if (!string.IsNullOrEmpty(errBody)) return errBody;
+                    }
+                }
+                throw;
             }
         }
 
@@ -2830,7 +2877,7 @@ namespace AntigravityDesktopClient
             headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             StackPanel userLeft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            
+
             Border avatar = new Border
             {
                 Width = 24,
@@ -3425,22 +3472,1355 @@ namespace AntigravityDesktopClient
             });
         }
 
-
-
-        private void StartOAuthLogin()
+        private class ProxyNodeItem
         {
-            if (isOAuthPolling) return;
+            public string Text { get; set; }
+            public int Port { get; set; }
+            public string Name { get; set; }
+            public override string ToString() { return Text; }
+        }
+
+        private void SwitchToView(string view)
+        {
+            currentView = view;
+            if (view == "proxy")
+            {
+                mainScroll.Visibility = Visibility.Collapsed;
+                proxySettingsScroll.Visibility = Visibility.Visible;
+
+                btnNavDashboard.Background = new SolidColorBrush(ColCardMuted);
+                btnNavDashboard.Foreground = new SolidColorBrush(ColTextMain);
+
+                btnNavProxySettings.Background = new SolidColorBrush(ColPrimaryLight);
+                btnNavProxySettings.Foreground = new SolidColorBrush(ColPrimaryDark);
+
+                LoadProxySettingsView();
+            }
+            else
+            {
+                proxySettingsScroll.Visibility = Visibility.Collapsed;
+                mainScroll.Visibility = Visibility.Visible;
+
+                btnNavDashboard.Background = new SolidColorBrush(ColPrimaryLight);
+                btnNavDashboard.Foreground = new SolidColorBrush(ColPrimaryDark);
+
+                btnNavProxySettings.Background = new SolidColorBrush(ColCardMuted);
+                btnNavProxySettings.Foreground = new SolidColorBrush(ColTextMain);
+
+                FetchDashboardData();
+            }
+        }
+
+        private ScrollViewer BuildProxySettingsView()
+        {
+            ScrollViewer sv = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(28, 24, 28, 28), Visibility = Visibility.Collapsed };
+            StackPanel body = new StackPanel();
+
+            // 1. Header Row
+            Grid pageHeader = new Grid { Margin = new Thickness(0, 0, 0, 20) };
+            pageHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pageHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel titleSp = new StackPanel();
+            titleSp.Children.Add(new TextBlock { Text = "🌐 代理配置", FontSize = 20, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
+            titleSp.Children.Add(new TextBlock { Text = "支持双轨自适应模式：模式 1 默认跟随系统网络；模式 2 导入机场订阅与住宅 ISP 开启多账号物理级独立出口隔离。", FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMuted) });
+            Grid.SetColumn(titleSp, 0);
+            pageHeader.Children.Add(titleSp);
+
+            Button btnBackToDash = CreateButton("🔙 返回仪表盘", ColCardMuted, new SolidColorBrush(ColTextMain), 11.5);
+            btnBackToDash.Padding = new Thickness(14, 6, 14, 6);
+            btnBackToDash.Click += (s, e) => SwitchToView("dashboard");
+            Grid.SetColumn(btnBackToDash, 1);
+            pageHeader.Children.Add(btnBackToDash);
+            body.Children.Add(pageHeader);
+
+            // 2. Mode Selection Card
+            Border modeCard = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(20),
+                Margin = new Thickness(0, 0, 0, 16)
+            };
+            StackPanel modeSp = new StackPanel();
+            modeSp.Children.Add(new TextBlock { Text = "01 选择网络工作模式", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 12) });
+
+            Grid modeGrid = new Grid();
+            modeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            modeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            // Mode 1 Option Card
+            Border cardMode1 = new Border { Background = new SolidColorBrush(ColCardMuted), BorderBrush = new SolidColorBrush(ColBorder), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(0, 0, 8, 0), Cursor = Cursors.Hand };
+            StackPanel spM1 = new StackPanel();
+            rbProxyModeDefault = new RadioButton { GroupName = "ProxyModeSelectGroup", Content = "模式 1：跟随系统默认代理 (0配置，开箱即用)", FontSize = 12.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) };
+            spM1.Children.Add(rbProxyModeDefault);
+            spM1.Children.Add(new TextBlock { Text = "适合单账号普通用户。无需任何网络配置，直接跟随你电脑当前默认的代理出海。", FontSize = 11.5, Foreground = new SolidColorBrush(ColTextMuted), TextWrapping = TextWrapping.Wrap });
+            cardMode1.Child = spM1;
+            Grid.SetColumn(cardMode1, 0);
+            modeGrid.Children.Add(cardMode1);
+
+            // Mode 2 Option Card
+            Border cardMode2 = new Border { Background = new SolidColorBrush(ColCardMuted), BorderBrush = new SolidColorBrush(ColPrimary), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Padding = new Thickness(14), Margin = new Thickness(8, 0, 0, 0), Cursor = Cursors.Hand };
+            StackPanel spM2 = new StackPanel();
+            rbProxyModeIsolated = new RadioButton { GroupName = "ProxyModeSelectGroup", Content = "模式 2：高级多出口独立隔离模式 (多账号防风控)", FontSize = 12.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark), Margin = new Thickness(0, 0, 0, 4), IsChecked = true };
+            spM2.Children.Add(rbProxyModeIsolated);
+            spM2.Children.Add(new TextBlock { Text = "适合多账号矩阵用户。导入订阅或住宅 ISP，系统在后台为各账号开辟独立端口，物理级防串流风控。", FontSize = 11.5, Foreground = new SolidColorBrush(ColTextMuted), TextWrapping = TextWrapping.Wrap });
+            cardMode2.Child = spM2;
+            Grid.SetColumn(cardMode2, 1);
+            modeGrid.Children.Add(cardMode2);
+
+            modeSp.Children.Add(modeGrid);
+            modeCard.Child = modeSp;
+            body.Children.Add(modeCard);
+
+            Border cardMode1Notice = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(24),
+                Margin = new Thickness(0, 0, 0, 16),
+                Visibility = Visibility.Collapsed
+            };
+            StackPanel spNotice = new StackPanel();
+            spNotice.Children.Add(new TextBlock { Text = "🌐 当前生效：模式 1（跟随系统默认代理）", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColGreen), Margin = new Thickness(0, 0, 0, 8) });
+            spNotice.Children.Add(new TextBlock { Text = "所有 Google 账号将直接复用你电脑当前正在运行的代理网络（如西游云/Clash 7888 或系统网络）出海，无需配置或分配任何独立端口。\n点击下方按钮即可保存并生效。", FontSize = 12.5, Foreground = new SolidColorBrush(ColTextMuted), TextWrapping = TextWrapping.Wrap });
+
+            StackPanel btnRowM1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
+            Button btnSaveM1 = CreateButton("💾 保存当前设置 (模式 1)", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
+            btnSaveM1.Padding = new Thickness(18, 7, 18, 7);
+            btnSaveM1.Click += (s, e) => SaveAndSyncProxySettings();
+            btnRowM1.Children.Add(btnSaveM1);
+            spNotice.Children.Add(btnRowM1);
+            cardMode1Notice.Child = spNotice;
+            body.Children.Add(cardMode1Notice);
+
+            // 3. Inputs Card
+            Border inputsCard = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(20),
+                Margin = new Thickness(0, 0, 0, 16)
+            };
+            StackPanel inSp = new StackPanel();
+            inSp.Children.Add(new TextBlock { Text = "02 节点与订阅导入 (仅模式 2 生效)", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 10) });
+
+            // Import Sub-mode selector (Tab-like Pills)
+            Border tabBorder = new Border { Background = new SolidColorBrush(ColCardMuted), CornerRadius = new CornerRadius(8), Padding = new Thickness(4), Margin = new Thickness(0, 0, 0, 14) };
+            Grid tabGrid = new Grid();
+            tabGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            tabGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            rbImportSubLink = new RadioButton { GroupName = "ImportSubModeGroup", Content = "🔗 订阅链接导入 (通用)", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), IsChecked = true, Margin = new Thickness(6, 4, 6, 4) };
+            rbImportAccount = new RadioButton { GroupName = "ImportSubModeGroup", Content = "🔑 官网账号托管 (自动更新/防失效)", FontSize = 12, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark), Margin = new Thickness(6, 4, 6, 4) };
+
+            Grid.SetColumn(rbImportSubLink, 0);
+            Grid.SetColumn(rbImportAccount, 1);
+            tabGrid.Children.Add(rbImportSubLink);
+            tabGrid.Children.Add(rbImportAccount);
+            tabBorder.Child = tabGrid;
+            inSp.Children.Add(tabBorder);
+
+            // Panel A: Subscription URL
+            panelImportSubLink = new StackPanel();
+            panelImportSubLink.Children.Add(new TextBlock { Text = "机场订阅链接 (Clash / 通用 Base64):", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
+            txtProxySubUrl = new TextBox { Height = 34, FontSize = 12, Background = new SolidColorBrush(ColCardMuted), Foreground = new SolidColorBrush(ColTextMain), BorderBrush = new SolidColorBrush(ColBorder), Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 0, 0, 12) };
+            panelImportSubLink.Children.Add(txtProxySubUrl);
+            inSp.Children.Add(panelImportSubLink);
+
+            // Panel B: Direct Official Account Login
+            panelImportAccount = new StackPanel { Visibility = Visibility.Collapsed };
+            panelImportAccount.Children.Add(new TextBlock { Text = "机场官网 API / 网站地址 (默认已适配西游云):", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
+            txtProxyApiBaseUrl = new TextBox { Text = "https://xyapi.kilxs.cn/api/v1", Height = 34, FontSize = 12, Background = new SolidColorBrush(ColCardMuted), Foreground = new SolidColorBrush(ColTextMain), BorderBrush = new SolidColorBrush(ColBorder), Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 0, 0, 10) };
+            panelImportAccount.Children.Add(txtProxyApiBaseUrl);
+
+            Grid accRow = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+            accRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            accRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            StackPanel accLeft = new StackPanel { Margin = new Thickness(0, 0, 6, 0) };
+            accLeft.Children.Add(new TextBlock { Text = "登录账号 / 邮箱:", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
+            txtProxyAccountEmail = new TextBox { Height = 34, FontSize = 12, Background = new SolidColorBrush(ColCardMuted), Foreground = new SolidColorBrush(ColTextMain), BorderBrush = new SolidColorBrush(ColBorder), Padding = new Thickness(8, 4, 8, 4) };
+            accLeft.Children.Add(txtProxyAccountEmail);
+            Grid.SetColumn(accLeft, 0);
+            accRow.Children.Add(accLeft);
+
+            StackPanel accRight = new StackPanel { Margin = new Thickness(6, 0, 0, 0) };
+            accRight.Children.Add(new TextBlock { Text = "登录密码:", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
+            txtProxyAccountPassword = new PasswordBox { Height = 34, FontSize = 12, Background = new SolidColorBrush(ColCardMuted), Foreground = new SolidColorBrush(ColTextMain), BorderBrush = new SolidColorBrush(ColBorder), Padding = new Thickness(8, 4, 8, 4) };
+            accRight.Children.Add(txtProxyAccountPassword);
+            Grid.SetColumn(accRight, 1);
+            accRow.Children.Add(accRight);
+            panelImportAccount.Children.Add(accRow);
+
+            panelImportAccount.Children.Add(new TextBlock { Text = "💡 登录时自动拉取最新订阅，密码不会落盘；云端拉取失败时会读取本机西游云已登录会话作为兜底。", FontSize = 11.5, Foreground = new SolidColorBrush(ColPrimaryDark), Margin = new Thickness(0, 0, 0, 12) });
+            inSp.Children.Add(panelImportAccount);
+
+            // Tab Switching handlers
+            rbImportSubLink.Checked += (s, e) =>
+            {
+                panelImportSubLink.Visibility = Visibility.Visible;
+                panelImportAccount.Visibility = Visibility.Collapsed;
+            };
+            rbImportAccount.Checked += (s, e) =>
+            {
+                panelImportSubLink.Visibility = Visibility.Collapsed;
+                panelImportAccount.Visibility = Visibility.Visible;
+            };
+
+            // Multi Custom Single Nodes Section
+            inSp.Children.Add(new TextBlock { Text = "自定义专属单节点 / 静态住宅 ISP 列表 (可添加多个):", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 6) });
+
+            panelCustomNodesList = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            inSp.Children.Add(panelCustomNodesList);
+
+            Grid addNodeGrid = new Grid { Margin = new Thickness(0, 0, 0, 14) };
+            addNodeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            addNodeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(160) });
+            addNodeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            txtNewNodeInput = new TextBox { Height = 34, FontSize = 12, Background = new SolidColorBrush(ColCardMuted), Foreground = new SolidColorBrush(ColTextMain), BorderBrush = new SolidColorBrush(ColBorder), Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(txtNewNodeInput, 0);
+            addNodeGrid.Children.Add(txtNewNodeInput);
+
+            txtNewNodeName = new TextBox { Height = 34, FontSize = 12, Background = new SolidColorBrush(ColCardMuted), Foreground = new SolidColorBrush(ColTextMain), BorderBrush = new SolidColorBrush(ColBorder), Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 0, 6, 0) };
+            Grid.SetColumn(txtNewNodeName, 1);
+            addNodeGrid.Children.Add(txtNewNodeName);
+
+            btnAddCustomNode = CreateButton("➕ 添加单节点", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11.5);
+            btnAddCustomNode.Height = 34;
+            btnAddCustomNode.Padding = new Thickness(14, 0, 14, 0);
+            btnAddCustomNode.Click += (s, e) => AddCustomSingleNode();
+            Grid.SetColumn(btnAddCustomNode, 2);
+            addNodeGrid.Children.Add(btnAddCustomNode);
+
+            inSp.Children.Add(addNodeGrid);
+            RenderCustomNodesList();
+
+            StackPanel actionRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            txtProxySyncStatus = new TextBlock { Text = "", FontSize = 12, Foreground = new SolidColorBrush(ColGreen), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+            actionRow.Children.Add(txtProxySyncStatus);
+
+            Button btnFetchNodes = CreateButton("📥 解析并优选节点", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
+            btnFetchNodes.Padding = new Thickness(18, 7, 18, 7);
+            btnFetchNodes.Click += (s, e) => FetchCandidateNodes();
+            actionRow.Children.Add(btnFetchNodes);
+            inSp.Children.Add(actionRow);
+
+            inputsCard.Child = inSp;
+            body.Children.Add(inputsCard);
+
+            // 3.5 Node Multi-Selector Card (02.5 可选节点列表与智能优选)
+            cardNodeSelector = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(20),
+                Margin = new Thickness(0, 0, 0, 16),
+                Visibility = Visibility.Collapsed
+            };
+            StackPanel nodeSelSp = new StackPanel();
+
+            Grid topSelGrid = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+            topSelGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            topSelGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel summarySp = new StackPanel();
+            summarySp.Children.Add(new TextBlock { Text = "02.5 节点选择与智能优选", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
+            txtNodeSelectorSummary = new TextBlock { Text = "已自动排除香港等受限地区，系统为您智能优选 5 个专线/高速节点：", FontSize = 12, Foreground = new SolidColorBrush(ColTextMuted) };
+            summarySp.Children.Add(txtNodeSelectorSummary);
+            Grid.SetColumn(summarySp, 0);
+            topSelGrid.Children.Add(summarySp);
+
+            StackPanel quickBtnRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+            Button btnPingCandidateNodes = CreateButton("⚡ 测试真实全链路", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11);
+            btnPingCandidateNodes.Padding = new Thickness(10, 4, 10, 4);
+            btnPingCandidateNodes.Margin = new Thickness(0, 0, 6, 0);
+            btnPingCandidateNodes.Click += (s, e) => PingAllCandidateNodes();
+            quickBtnRow.Children.Add(btnPingCandidateNodes);
+
+            Button btnSelectRecommended = CreateButton("⭐ 仅选推荐", ColPrimaryLight, new SolidColorBrush(ColPrimaryDark), 11);
+            btnSelectRecommended.Padding = new Thickness(10, 4, 10, 4);
+            btnSelectRecommended.Margin = new Thickness(0, 0, 6, 0);
+            btnSelectRecommended.Click += (s, e) => SelectRecommendedOnly();
+            quickBtnRow.Children.Add(btnSelectRecommended);
+
+            Button btnSelectAll = CreateButton("☑️ 全选", ColCardMuted, new SolidColorBrush(ColTextMain), 11);
+            btnSelectAll.Padding = new Thickness(10, 4, 10, 4);
+            btnSelectAll.Margin = new Thickness(0, 0, 6, 0);
+            btnSelectAll.Click += (s, e) => SelectAllNodes(true);
+            quickBtnRow.Children.Add(btnSelectAll);
+
+            Button btnClearAll = CreateButton("⬜ 清空", ColCardMuted, new SolidColorBrush(ColTextMuted), 11);
+            btnClearAll.Padding = new Thickness(10, 4, 10, 4);
+            btnClearAll.Click += (s, e) => SelectAllNodes(false);
+            quickBtnRow.Children.Add(btnClearAll);
+
+            Grid.SetColumn(quickBtnRow, 1);
+            topSelGrid.Children.Add(quickBtnRow);
+            nodeSelSp.Children.Add(topSelGrid);
+
+            ScrollViewer nodesScroll = new ScrollViewer { MaxHeight = 360, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(0, 0, 0, 14) };
+            nodesScroll.PreviewMouseWheel += (s, e) =>
+            {
+                var nodeSv = s as ScrollViewer;
+                if (nodeSv != null)
+                {
+                    double current = nodeSv.VerticalOffset;
+                    double target = current - (e.Delta * 0.75);
+                    if (target < 0) target = 0;
+                    if (target > nodeSv.ScrollableHeight) target = nodeSv.ScrollableHeight;
+                    nodeSv.ScrollToVerticalOffset(target);
+                    e.Handled = true;
+                }
+            };
+            panelAvailableNodesList = new StackPanel();
+            nodesScroll.Content = panelAvailableNodesList;
+            nodeSelSp.Children.Add(nodesScroll);
+
+            StackPanel confirmRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            btnConfirmSelectedNodes = CreateButton("🚀 确认选中的节点并激活独立通道 (已选 0 个)", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
+            btnConfirmSelectedNodes.Padding = new Thickness(20, 8, 20, 8);
+            btnConfirmSelectedNodes.Click += (s, e) => ApplySelectedNodesToEgress();
+            confirmRow.Children.Add(btnConfirmSelectedNodes);
+            nodeSelSp.Children.Add(confirmRow);
+
+            cardNodeSelector.Child = nodeSelSp;
+            body.Children.Add(cardNodeSelector);
+
+            // 4. Active Egress Channels Matrix
+            Border channelsCard = new Border
+            {
+                Background = new SolidColorBrush(ColCard),
+                BorderBrush = new SolidColorBrush(ColBorder),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(20)
+            };
+            StackPanel chSp = new StackPanel();
+
+            Grid chHeader = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+            chHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            chHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            chHeader.Children.Add(new TextBlock { Text = "03 已就绪的专属独立出口通道", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center });
+
+            Button btnPingEgress = CreateButton("🔄 测试通道延迟", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11);
+            btnPingEgress.Padding = new Thickness(10, 4, 10, 4);
+            btnPingEgress.Click += (s, e) => PingEgressChannels();
+            Grid.SetColumn(btnPingEgress, 1);
+            chHeader.Children.Add(btnPingEgress);
+            chSp.Children.Add(chHeader);
+
+            panelEgressCards = new StackPanel();
+            chSp.Children.Add(panelEgressCards);
+            channelsCard.Child = chSp;
+            body.Children.Add(channelsCard);
+
+            Action updateModeUI = () =>
+            {
+                bool isDef = rbProxyModeDefault.IsChecked == true;
+                cardMode1.BorderBrush = isDef ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder);
+                cardMode2.BorderBrush = !isDef ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder);
+                rbProxyModeDefault.Foreground = isDef ? new SolidColorBrush(ColPrimaryDark) : new SolidColorBrush(ColTextMain);
+                rbProxyModeIsolated.Foreground = !isDef ? new SolidColorBrush(ColPrimaryDark) : new SolidColorBrush(ColTextMain);
+
+                // 联动控制区域显隐
+                cardMode1Notice.Visibility = isDef ? Visibility.Visible : Visibility.Collapsed;
+                inputsCard.Visibility = isDef ? Visibility.Collapsed : Visibility.Visible;
+                cardNodeSelector.Visibility = (isDef || currentFetchedNodes == null || currentFetchedNodes.Count == 0) ? Visibility.Collapsed : Visibility.Visible;
+                channelsCard.Visibility = isDef ? Visibility.Collapsed : Visibility.Visible;
+            };
+
+            rbProxyModeDefault.Checked += (s, e) => updateModeUI();
+            rbProxyModeIsolated.Checked += (s, e) => updateModeUI();
+            cardMode1.MouseLeftButtonUp += (s, e) => { rbProxyModeDefault.IsChecked = true; updateModeUI(); };
+            cardMode2.MouseLeftButtonUp += (s, e) => { rbProxyModeIsolated.IsChecked = true; updateModeUI(); };
+
+            sv.Content = body;
+            return sv;
+        }
+
+        private void RenderCustomNodesList()
+        {
+            if (panelCustomNodesList == null) return;
+            panelCustomNodesList.Children.Clear();
+
+            if (customSingleNodes == null) customSingleNodes = new List<Dictionary<string, object>>();
+
+            if (customSingleNodes.Count == 0)
+            {
+                panelCustomNodesList.Children.Add(new TextBlock
+                {
+                    Text = "尚未添加住宅 ISP 节点。凭据只从你在上方输入的节点生成，不再内置默认账号。",
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(ColTextMuted),
+                    Margin = new Thickness(2, 4, 2, 8)
+                });
+                return;
+            }
+
+            for (int i = 0; i < customSingleNodes.Count; i++)
+            {
+                int nodeIdx = i;
+                var nObj = customSingleNodes[i];
+                string name = nObj.ContainsKey("name") ? nObj["name"].ToString() : "自定义节点";
+                string raw = nObj.ContainsKey("raw") ? nObj["raw"].ToString() : "";
+
+                Border itemCard = new Border
+                {
+                    Background = new SolidColorBrush(ColCardMuted),
+                    BorderBrush = new SolidColorBrush(ColBorder),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(10, 6, 10, 6),
+                    Margin = new Thickness(0, 0, 0, 6)
+                };
+
+                Grid itemGrid = new Grid();
+                itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                StackPanel leftSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                leftSp.Children.Add(new TextBlock { Text = "🇺🇸", FontSize = 13, Margin = new Thickness(0, 0, 6, 0) });
+                leftSp.Children.Add(new TextBlock { Text = name, FontSize = 12, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 8, 0) });
+
+                Border pill = new Border { Background = new SolidColorBrush(ColPrimaryLight), BorderBrush = new SolidColorBrush(ColPrimary), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(4, 1, 4, 1), Margin = new Thickness(0, 0, 8, 0) };
+                pill.Child = new TextBlock { Text = "静态住宅", FontSize = 9.5, Foreground = new SolidColorBrush(ColPrimaryDark), FontWeight = FontWeights.SemiBold };
+                leftSp.Children.Add(pill);
+
+                leftSp.Children.Add(new TextBlock { Text = MaskNodeSecret(raw), FontSize = 11, Foreground = new SolidColorBrush(ColTextMuted), VerticalAlignment = VerticalAlignment.Center });
+                Grid.SetColumn(leftSp, 0);
+                itemGrid.Children.Add(leftSp);
+
+                Button btnDel = CreateButton("🗑️", ColCardMuted, new SolidColorBrush(ColRed), 10.5);
+                btnDel.Padding = new Thickness(6, 2, 6, 2);
+                btnDel.Click += (s, e) => RemoveCustomSingleNode(nodeIdx);
+                Grid.SetColumn(btnDel, 1);
+                itemGrid.Children.Add(btnDel);
+
+                itemCard.Child = itemGrid;
+                panelCustomNodesList.Children.Add(itemCard);
+            }
+        }
+
+        private string MaskNodeSecret(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return "";
+            int scheme = raw.IndexOf("://", StringComparison.Ordinal);
+            int at = scheme >= 0 ? raw.IndexOf('@', scheme + 3) : -1;
+            if (at > scheme)
+            {
+                string prefix = raw.Substring(0, scheme + 3);
+                string userInfo = raw.Substring(scheme + 3, at - scheme - 3);
+                int separator = userInfo.IndexOf(':');
+                string user = separator >= 0 ? userInfo.Substring(0, separator) : userInfo;
+                return prefix + user + ":***" + raw.Substring(at);
+            }
+            string[] parts = raw.Split(':');
+            if (parts.Length >= 4) return parts[0] + ":" + parts[1] + ":" + parts[2] + ":***";
+            return raw;
+        }
+
+        private void AddCustomSingleNode()
+        {
+            if (txtNewNodeInput == null) return;
+            string raw = txtNewNodeInput.Text.Trim();
+            if (string.IsNullOrEmpty(raw))
+            {
+                MessageBox.Show("请输入单节点配置地址（如 203.0.113.10:443:user:pass 或 socks5://...）", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string name = (txtNewNodeName != null && !string.IsNullOrEmpty(txtNewNodeName.Text.Trim()))
+                ? txtNewNodeName.Text.Trim()
+                : (string.Format("专属单节点 #{0}", customSingleNodes.Count + 1));
+
+            var newNode = new Dictionary<string, object>();
+            newNode["name"] = name;
+            newNode["raw"] = raw;
+            customSingleNodes.Add(newNode);
+
+            txtNewNodeInput.Text = "";
+            if (txtNewNodeName != null) txtNewNodeName.Text = "";
+
+            RenderCustomNodesList();
+        }
+
+        private void RemoveCustomSingleNode(int index)
+        {
+            if (index >= 0 && index < customSingleNodes.Count)
+            {
+                customSingleNodes.RemoveAt(index);
+                RenderCustomNodesList();
+            }
+        }
+
+        private void FetchCandidateNodes()
+        {
+            bool isAccountMode = rbImportAccount != null && rbImportAccount.IsChecked == true;
+            string subUrl = txtProxySubUrl != null ? txtProxySubUrl.Text.Trim() : "";
+            string apiBase = txtProxyApiBaseUrl != null ? txtProxyApiBaseUrl.Text.Trim() : "";
+            string accEmail = txtProxyAccountEmail != null ? txtProxyAccountEmail.Text.Trim() : "";
+            string accPass = txtProxyAccountPassword != null ? txtProxyAccountPassword.Password.Trim() : "";
+
+            if (isAccountMode && (string.IsNullOrEmpty(accEmail) || string.IsNullOrEmpty(accPass)))
+            {
+                txtProxySyncStatus.Text = "⚠️ 请输入官网登录账号(邮箱)与密码";
+                txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                return;
+            }
+
+            txtProxySyncStatus.Text = isAccountMode ? "正在向官网 API 认证并拉取节点..." : "正在在线拉取并智能解析节点...";
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+
+            string reqPath = isAccountMode ? "api/network/account-login" : "api/network/fetch-nodes";
+            var requestPayload = new Dictionary<string, object>();
+            requestPayload["customNodes"] = customSingleNodes;
+            if (isAccountMode)
+            {
+                requestPayload["apiBaseUrl"] = apiBase;
+                requestPayload["email"] = accEmail;
+                requestPayload["password"] = accPass;
+            }
+            else
+            {
+                requestPayload["subscriptionUrl"] = subUrl;
+            }
+            string reqBody = jsonSerializer.Serialize(requestPayload);
+
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost(reqPath, reqBody);
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    if (dict != null && dict.ContainsKey("ok") && !Convert.ToBoolean(dict["ok"]))
+                    {
+                        string errMsg = dict.ContainsKey("error") ? dict["error"].ToString() : (dict.ContainsKey("message") ? dict["message"].ToString() : "认证失败");
+                        Dispatcher.Invoke(() =>
+                        {
+                            txtProxySyncStatus.Text = "⚠️ " + errMsg;
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        });
+                        return;
+                    }
+
+                    var nodesList = dict != null && dict.ContainsKey("nodes") ? dict["nodes"] as ArrayList : null;
+                    int totalCount = dict != null && dict.ContainsKey("totalCount") ? Convert.ToInt32(dict["totalCount"]) : 0;
+                    int recCount = dict != null && dict.ContainsKey("recommendedCount") ? Convert.ToInt32(dict["recommendedCount"]) : 0;
+
+                    bool isFallback = dict != null && dict.ContainsKey("isFallback") && Convert.ToBoolean(dict["isFallback"]);
+                    string fetchErr = (dict != null && dict.ContainsKey("fetchError")) ? dict["fetchError"].ToString() : "";
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        currentFetchedNodes.Clear();
+                        if (nodesList != null)
+                            foreach (var item in nodesList)
+                            {
+                                var nDict = item as Dictionary<string, object>;
+                                if (nDict != null) currentFetchedNodes.Add(nDict);
+                            }
+
+                        string warningMsg = (dict != null && dict.ContainsKey("warning")) ? dict["warning"].ToString() : "";
+
+                        if (currentFetchedNodes.Count == 0)
+                        {
+                            txtProxySyncStatus.Text = string.Format("⚠️ 未能解析到有效节点: {0}", string.IsNullOrEmpty(fetchErr) ? "请检查账号密码或订阅链接" : fetchErr);
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                            cardNodeSelector.Visibility = Visibility.Collapsed;
+                            return;
+                        }
+
+                        if (!string.IsNullOrEmpty(warningMsg))
+                        {
+                            txtProxySyncStatus.Text = string.Format("💡 {0}", warningMsg);
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                            txtNodeSelectorSummary.Text = string.Format("已为您自动载入 {0} 个出海节点，智能优选 {1} 个专线/高速节点：", currentFetchedNodes.Count, recCount);
+                        }
+                        else if (!string.IsNullOrEmpty(fetchErr))
+                        {
+                            txtProxySyncStatus.Text = string.Format("⚠️ 订阅拉取失败: {0}（已载入本地专线兜底）", fetchErr);
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                            txtNodeSelectorSummary.Text = string.Format("远程订阅拉取受阻（{0}），已启用本地优质专线节点供您选择：", fetchErr);
+                        }
+                        else if (isAccountMode)
+                        {
+                            txtProxySyncStatus.Text = string.Format("✓ 官网账号认证成功，已拉取并托管 {0} 个最新出海节点", currentFetchedNodes.Count);
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            txtNodeSelectorSummary.Text = string.Format("已通过官网账号成功拉取 {0} 个最新节点，智能优选 {1} 个专线/高速节点：", currentFetchedNodes.Count, recCount);
+                        }
+                        else if (isFallback && string.IsNullOrEmpty(subUrl))
+                        {
+                            txtProxySyncStatus.Text = string.Format("⚠️ 当前仅载入 {0} 个自定义住宅节点；激活前还需要从订阅或本地西游云会话读取新加坡专线", currentFetchedNodes.Count);
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                            txtNodeSelectorSummary.Text = string.Format("当前只有自定义节点（共 {0} 个），系统不会伪造中转节点；请导入包含新加坡 IEPL/IPLC/专线的真实订阅：", currentFetchedNodes.Count);
+                        }
+                        else
+                        {
+                            txtProxySyncStatus.Text = string.Format("✓ 已成功从订阅拉取并解析 {0} 个出海节点（已剔除受限地区）", currentFetchedNodes.Count);
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            txtNodeSelectorSummary.Text = string.Format("已成功拉取 {0} 个可用出海节点（已排除香港等受限地区），智能优选 {1} 个专线/高速节点（可滚动查看全部）：", currentFetchedNodes.Count, recCount);
+                        }
+
+                        cardNodeSelector.Visibility = Visibility.Visible;
+                        RenderAvailableNodesSelector();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        txtProxySyncStatus.Text = "⚠️ 解析节点失败: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                    });
+                }
+            });
+        }
+
+        private void RenderAvailableNodesSelector()
+        {
+            panelAvailableNodesList.Children.Clear();
+            nodeCheckBoxes.Clear();
+
+            if (currentFetchedNodes.Count == 0)
+            {
+                panelAvailableNodesList.Children.Add(new TextBlock { Text = "未解析到任何可用出海节点，请检查订阅链接或输入住宅 ISP。", Foreground = new SolidColorBrush(ColTextMuted), Margin = new Thickness(0, 10, 0, 10) });
+                UpdateSelectedNodesCount();
+                return;
+            }
+
+            Grid grid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            int rows = (currentFetchedNodes.Count + 1) / 2;
+            for (int r = 0; r < rows; r++)
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            }
+
+            for (int i = 0; i < currentFetchedNodes.Count; i++)
+            {
+                var n = currentFetchedNodes[i];
+                string name = n.ContainsKey("name") ? n["name"].ToString() : "未知节点";
+                string country = n.ContainsKey("country") ? n["country"].ToString() : "🌐";
+                string region = n.ContainsKey("region") ? n["region"].ToString() : "其他";
+                string protocol = n.ContainsKey("protocol") ? n["protocol"].ToString() : "HTTP";
+                string nodeId = n.ContainsKey("id") ? n["id"].ToString() : i.ToString();
+                bool recommended = n.ContainsKey("recommended") && Convert.ToBoolean(n["recommended"]);
+                var tags = n.ContainsKey("tags") ? n["tags"] as ArrayList : null;
+
+                int latency = nodeLatencies.ContainsKey(nodeId) ? nodeLatencies[nodeId] : (nodeLatencies.ContainsKey(name) ? nodeLatencies[name] : 0);
+                string latencyLabel = nodeLatencyLabels.ContainsKey(nodeId) ? nodeLatencyLabels[nodeId] : (nodeLatencyLabels.ContainsKey(name) ? nodeLatencyLabels[name] : "尚未测速");
+
+                Border nodeCard = new Border
+                {
+                    Background = new SolidColorBrush(ColCardMuted),
+                    BorderBrush = new SolidColorBrush(ColBorder),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12, 10, 12, 10),
+                    Margin = new Thickness(i % 2 == 0 ? 0 : 5, 0, i % 2 == 0 ? 5 : 0, 8),
+                    Cursor = Cursors.Hand
+                };
+
+                StackPanel cardSp = new StackPanel();
+
+                // Top Line: Checkbox + Country + Name + Recommended
+                Grid topL = new Grid();
+                topL.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                topL.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                topL.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                CheckBox cb = new CheckBox
+                {
+                    IsChecked = recommended,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 8, 0),
+                    Tag = i
+                };
+                cb.Checked += (s, e) => { UpdateSelectedNodesCount(); UpdateCardBorder(nodeCard, cb.IsChecked == true); };
+                cb.Unchecked += (s, e) => { UpdateSelectedNodesCount(); UpdateCardBorder(nodeCard, cb.IsChecked == true); };
+                nodeCheckBoxes.Add(cb);
+                Grid.SetColumn(cb, 0);
+                topL.Children.Add(cb);
+
+                StackPanel titleSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                titleSp.Children.Add(new TextBlock { Text = country, FontSize = 13, Margin = new Thickness(0, 0, 5, 0) });
+                titleSp.Children.Add(new TextBlock { Text = name, FontSize = 12.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), TextTrimming = TextTrimming.CharacterEllipsis });
+                Grid.SetColumn(titleSp, 1);
+                topL.Children.Add(titleSp);
+
+                if (recommended)
+                {
+                    Border recPill = new Border { Background = new SolidColorBrush(ColPrimaryLight), BorderBrush = new SolidColorBrush(ColPrimary), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(5, 1, 5, 1) };
+                    recPill.Child = new TextBlock { Text = "⭐ 推荐", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
+                    Grid.SetColumn(recPill, 2);
+                    topL.Children.Add(recPill);
+                }
+                cardSp.Children.Add(topL);
+
+                // Bottom Line: Tags + Protocol + Latency Pill
+                Grid botL = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+                botL.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                botL.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                StackPanel tagsSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                if (tags != null)
+                {
+                    foreach (var tag in tags)
+                    {
+                        string tStr = tag.ToString();
+                        Border tagPill = new Border { Background = new SolidColorBrush(ColCard), BorderBrush = new SolidColorBrush(ColBorder), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(4, 1, 4, 1), Margin = new Thickness(0, 0, 4, 0) };
+                        tagPill.Child = new TextBlock { Text = tStr, FontSize = 9.5, Foreground = new SolidColorBrush(ColTextMuted) };
+                        tagsSp.Children.Add(tagPill);
+                    }
+                }
+
+                Border protoPill = new Border { Background = new SolidColorBrush(ColCard), CornerRadius = new CornerRadius(4), Padding = new Thickness(4, 1, 4, 1) };
+                protoPill.Child = new TextBlock { Text = protocol, FontSize = 9, Foreground = new SolidColorBrush(ColTextMuted) };
+                tagsSp.Children.Add(protoPill);
+                Grid.SetColumn(tagsSp, 0);
+                botL.Children.Add(tagsSp);
+
+                // Latency Badge
+                Border latPill = new Border
+                {
+                    Background = new SolidColorBrush(latency > 0 ? (latency < 150 ? System.Windows.Media.Color.FromArgb(30, 34, 197, 94) : System.Windows.Media.Color.FromArgb(30, 245, 158, 11)) : (latency < 0 ? System.Windows.Media.Color.FromArgb(30, 239, 68, 68) : System.Windows.Media.Color.FromArgb(20, 148, 163, 184))),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 1, 5, 1)
+                };
+                string latText = latency > 0 ? string.Format("{0} {1}ms", latencyLabel, latency) : (latency < 0 ? latencyLabel + " 超时" : latencyLabel);
+                System.Windows.Media.Color latCol = latency > 0 ? (latency < 150 ? ColGreen : ColAmber) : (latency < 0 ? ColRed : ColTextMuted);
+                latPill.Child = new TextBlock { Text = latText, FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(latCol) };
+                Grid.SetColumn(latPill, 1);
+                botL.Children.Add(latPill);
+
+                cardSp.Children.Add(botL);
+                nodeCard.Child = cardSp;
+
+                UpdateCardBorder(nodeCard, cb.IsChecked == true);
+
+                nodeCard.MouseLeftButtonUp += (s, e) =>
+                {
+                    if (e.OriginalSource != cb)
+                    {
+                        cb.IsChecked = !cb.IsChecked;
+                    }
+                };
+
+                Grid.SetRow(nodeCard, i / 2);
+                Grid.SetColumn(nodeCard, i % 2);
+                grid.Children.Add(nodeCard);
+            }
+
+            panelAvailableNodesList.Children.Add(grid);
+            UpdateSelectedNodesCount();
+        }
+
+        private void UpdateCardBorder(Border b, bool isChecked)
+        {
+            if (b == null) return;
+            b.BorderBrush = isChecked ? new SolidColorBrush(ColPrimary) : new SolidColorBrush(ColBorder);
+        }
+
+        private void PingAllCandidateNodes()
+        {
+            if (currentFetchedNodes.Count == 0) return;
+            txtProxySyncStatus.Text = "正在测速所有节点连通性...";
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+
+            string reqBody = string.Format("{{\"nodes\":{0}}}", jsonSerializer.Serialize(currentFetchedNodes));
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/ping", reqBody);
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    var lats = dict != null && dict.ContainsKey("latencies") ? dict["latencies"] as Dictionary<string, object> : null;
+                    var measurements = dict != null && dict.ContainsKey("measurements") ? dict["measurements"] as Dictionary<string, object> : null;
+                    if (lats != null)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            foreach (var kvp in lats)
+                            {
+                                nodeLatencies[kvp.Key] = Convert.ToInt32(kvp.Value);
+                            }
+                            if (measurements != null)
+                            {
+                                foreach (var kvp in measurements)
+                                {
+                                    var detail = kvp.Value as Dictionary<string, object>;
+                                    if (detail != null && detail.ContainsKey("label")) nodeLatencyLabels[kvp.Key] = detail["label"].ToString();
+                                }
+                            }
+                            txtProxySyncStatus.Text = "✓ 已激活节点显示 Listener 真实全链路；未激活节点不再用国内入口握手冒充延迟";
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            RenderAvailableNodesSelector();
+                        });
+                    }
+                }
+                catch {}
+            });
+        }
+
+        private void PingEgressChannels()
+        {
+            if (currentEgressPlanList == null || currentEgressPlanList.Count == 0) return;
+            txtProxySyncStatus.Text = "正在测试独立通道出口延迟...";
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+
+            string reqBody = string.Format("{{\"nodes\":{0}}}", jsonSerializer.Serialize(currentEgressPlanList));
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/ping", reqBody);
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    var lats = dict != null && dict.ContainsKey("latencies") ? dict["latencies"] as Dictionary<string, object> : null;
+                    var measurements = dict != null && dict.ContainsKey("measurements") ? dict["measurements"] as Dictionary<string, object> : null;
+                    if (lats != null)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            foreach (var kvp in lats)
+                            {
+                                egressLatencies[kvp.Key] = Convert.ToInt32(kvp.Value);
+                            }
+                            if (measurements != null)
+                            {
+                                foreach (var kvp in measurements)
+                                {
+                                    var detail = kvp.Value as Dictionary<string, object>;
+                                    if (detail != null && detail.ContainsKey("label")) egressLatencyLabels[kvp.Key] = detail["label"].ToString();
+                                }
+                            }
+                            txtProxySyncStatus.Text = "✓ 已通过各 Listener 实测中转 + 落地的通道全链路延迟";
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            RenderEgressPlanCards(currentEgressPlanList);
+                        });
+                    }
+                }
+                catch {}
+            });
+        }
+
+        private void SelectRecommendedOnly()
+        {
+            for (int i = 0; i < nodeCheckBoxes.Count; i++)
+            {
+                bool isRec = currentFetchedNodes.Count > i && currentFetchedNodes[i].ContainsKey("recommended") && Convert.ToBoolean(currentFetchedNodes[i]["recommended"]);
+                nodeCheckBoxes[i].IsChecked = isRec;
+            }
+            UpdateSelectedNodesCount();
+        }
+
+        private void SelectAllNodes(bool check)
+        {
+            foreach (var cb in nodeCheckBoxes)
+            {
+                cb.IsChecked = check;
+            }
+            UpdateSelectedNodesCount();
+        }
+
+        private void UpdateSelectedNodesCount()
+        {
+            int selectedCount = 0;
+            foreach (var cb in nodeCheckBoxes)
+            {
+                if (cb.IsChecked == true) selectedCount++;
+            }
+            if (btnConfirmSelectedNodes != null)
+            {
+                btnConfirmSelectedNodes.Content = string.Format("🚀 确认选中的节点并激活独立通道 (已选 {0} 个)", selectedCount);
+            }
+        }
+
+        private void ApplySelectedNodesToEgress()
+        {
+            List<Dictionary<string, object>> selectedList = new List<Dictionary<string, object>>();
+            for (int i = 0; i < nodeCheckBoxes.Count; i++)
+            {
+                if (nodeCheckBoxes[i].IsChecked == true && i < currentFetchedNodes.Count)
+                {
+                    selectedList.Add(currentFetchedNodes[i]);
+                }
+            }
+
+            if (selectedList.Count == 0)
+            {
+                MessageBox.Show("请至少勾选 1 个可用节点后再激活独立通道！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string subUrl = txtProxySubUrl != null ? txtProxySubUrl.Text.Trim() : "";
+
+            txtProxySyncStatus.Text = string.Format("正在为选中的 {0} 个节点划分独立端口并激活配置...", selectedList.Count);
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+
+            var requestPayload = new Dictionary<string, object>();
+            requestPayload["selectedNodes"] = selectedList;
+            requestPayload["subscriptionUrl"] = subUrl;
+            requestPayload["customNodes"] = customSingleNodes;
+            string reqBody = jsonSerializer.Serialize(requestPayload);
+
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/apply-nodes", reqBody);
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    var egressPlan = dict != null && dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
+                    var activation = dict != null && dict.ContainsKey("activation") ? dict["activation"] as Dictionary<string, object> : null;
+                    bool restartRequired = activation != null && activation.ContainsKey("restartRequired") && Convert.ToBoolean(activation["restartRequired"]);
+                    var pendingPorts = activation != null && activation.ContainsKey("pendingPorts") ? activation["pendingPorts"] as ArrayList : null;
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        currentEgressPlanList = egressPlan;
+                        if (restartRequired)
+                        {
+                            txtProxySyncStatus.Text = "⚠️ 链式配置已安全写入；请在西游云切换一次配置或重启西游云，使端口 " + (pendingPorts != null ? string.Join(", ", pendingPorts.ToArray()) : "7892+") + " 开始监听";
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                            ShowToast("配置已写入，等待西游云重新加载");
+                        }
+                        else
+                        {
+                            txtProxySyncStatus.Text = string.Format("✓ 配置已写入，{0} 个独立端口正在监听 (7892~{1})；可点击下方按钮实测全链路", egressPlan != null ? egressPlan.Count : 0, 7892 + (egressPlan != null ? egressPlan.Count - 1 : 0));
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            ShowToast("✓ 独立端口已开始监听");
+                        }
+                        RenderEgressPlanCards(egressPlan);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        txtProxySyncStatus.Text = "⚠️ 划分通道失败: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                    });
+                }
+            });
+        }
+
+        private void LoadProxySettingsView()
+        {
             ThreadPool.QueueUserWorkItem((state) =>
             {
                 try
                 {
-                    string res = SendApiPost("api/oauth/start", "{}");
+                    string res = SendApiGet("api/network/settings");
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    if (dict != null)
+                    {
+                        var ns = dict.ContainsKey("networkSettings") ? dict["networkSettings"] as Dictionary<string, object> : null;
+                        var egressPlan = dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
+
+                        Dispatcher.Invoke(() =>
+                        {
+                            currentEgressPlanList = egressPlan;
+                            if (ns != null)
+                            {
+                                string mode = ns.ContainsKey("mode") ? ns["mode"].ToString() : "isolated";
+                                if (mode == "default") rbProxyModeDefault.IsChecked = true;
+                                else rbProxyModeIsolated.IsChecked = true;
+
+                                if (ns.ContainsKey("subscriptionUrl")) txtProxySubUrl.Text = ns["subscriptionUrl"].ToString();
+
+                                if (ns.ContainsKey("customNodes"))
+                                {
+                                    var cList = ns["customNodes"] as ArrayList;
+                                    if (cList != null && cList.Count > 0)
+                                    {
+                                        customSingleNodes.Clear();
+                                        foreach (var ci in cList)
+                                        {
+                                            var cd = ci as Dictionary<string, object>;
+                                            if (cd != null) customSingleNodes.Add(cd);
+                                        }
+                                        RenderCustomNodesList();
+                                    }
+                                }
+
+                                if (ns.ContainsKey("accountSettings"))
+                                {
+                                    var acc = ns["accountSettings"] as Dictionary<string, object>;
+                                    if (acc != null)
+                                    {
+                                        if (acc.ContainsKey("apiBaseUrl")) txtProxyApiBaseUrl.Text = acc["apiBaseUrl"].ToString();
+                                        if (acc.ContainsKey("email")) txtProxyAccountEmail.Text = acc["email"].ToString();
+                                        if (acc.ContainsKey("password")) txtProxyAccountPassword.Password = acc["password"].ToString();
+                                    }
+                                }
+
+                                if (ns.ContainsKey("importMode") && ns["importMode"].ToString() == "account")
+                                {
+                                    rbImportAccount.IsChecked = true;
+                                    panelImportSubLink.Visibility = Visibility.Collapsed;
+                                    panelImportAccount.Visibility = Visibility.Visible;
+                                }
+                            }
+                            RenderEgressPlanCards(egressPlan);
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (txtProxySyncStatus != null)
+                        {
+                            txtProxySyncStatus.Text = "加载通道失败: " + ex.Message;
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        }
+                    });
+                }
+            });
+        }
+
+        private void RenderEgressPlanCards(ArrayList plan)
+        {
+            if (panelEgressCards == null) return;
+            panelEgressCards.Children.Clear();
+            currentEgressPlanList = plan;
+
+            if (plan == null || plan.Count == 0)
+            {
+                Border emptyCard = new Border
+                {
+                    Background = new SolidColorBrush(ColCardMuted),
+                    BorderBrush = new SolidColorBrush(ColBorder),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(16),
+                    Margin = new Thickness(0, 4, 0, 0)
+                };
+                TextBlock tbEmp = new TextBlock
+                {
+                    Text = "尚未同步独立通道。请点击上方“解析并优选节点”，勾选后点击激活。",
+                    FontSize = 12,
+                    Foreground = new SolidColorBrush(ColTextMuted),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+                emptyCard.Child = tbEmp;
+                panelEgressCards.Children.Add(emptyCard);
+                return;
+            }
+
+            Grid grid = new Grid { Margin = new Thickness(0, 4, 0, 0) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            int rows = (plan.Count + 1) / 2;
+            for (int r = 0; r < rows; r++)
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            }
+
+            for (int i = 0; i < plan.Count; i++)
+            {
+                var item = plan[i] as Dictionary<string, object>;
+                if (item == null) continue;
+
+                string country = item.ContainsKey("country") ? item["country"].ToString() : "🌐";
+                string name = item.ContainsKey("name") ? item["name"].ToString() : "未知节点";
+                string protocol = item.ContainsKey("protocol") ? item["protocol"].ToString() : "HTTP";
+                string port = item.ContainsKey("port") ? item["port"].ToString() : "7890";
+                string desc = item.ContainsKey("desc") ? item["desc"].ToString() : "";
+                string egressId = item.ContainsKey("id") ? item["id"].ToString() : port;
+
+                int lat = egressLatencies.ContainsKey(egressId) ? egressLatencies[egressId] : (egressLatencies.ContainsKey(port) ? egressLatencies[port] : 0);
+                string latencyLabel = egressLatencyLabels.ContainsKey(egressId) ? egressLatencyLabels[egressId] : (egressLatencyLabels.ContainsKey(port) ? egressLatencyLabels[port] : "通道全链路");
+
+                Border card = new Border
+                {
+                    Background = new SolidColorBrush(ColCardMuted),
+                    BorderBrush = new SolidColorBrush(ColBorder),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(14),
+                    Margin = new Thickness(i % 2 == 0 ? 0 : 5, 0, i % 2 == 0 ? 5 : 0, 10)
+                };
+
+                StackPanel cardSp = new StackPanel();
+                Grid topG = new Grid();
+                topG.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                topG.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                StackPanel titleL = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                titleL.Children.Add(new TextBlock { Text = country, FontSize = 14, Margin = new Thickness(0, 0, 6, 0) });
+                titleL.Children.Add(new TextBlock { Text = name, FontSize = 13, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), TextTrimming = TextTrimming.CharacterEllipsis });
+                Grid.SetColumn(titleL, 0);
+                topG.Children.Add(titleL);
+
+                StackPanel rightPills = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+                if (lat != 0)
+                {
+                    Border latB = new Border
+                    {
+                        Background = new SolidColorBrush(lat > 0 ? (lat < 150 ? System.Windows.Media.Color.FromArgb(30, 34, 197, 94) : System.Windows.Media.Color.FromArgb(30, 245, 158, 11)) : System.Windows.Media.Color.FromArgb(30, 239, 68, 68)),
+                        CornerRadius = new CornerRadius(4),
+                        Padding = new Thickness(5, 1, 5, 1),
+                        Margin = new Thickness(0, 0, 6, 0)
+                    };
+                    latB.Child = new TextBlock { Text = lat > 0 ? string.Format("{0} {1}ms", latencyLabel, lat) : latencyLabel + " 超时", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(lat > 0 ? (lat < 150 ? ColGreen : ColAmber) : ColRed) };
+                    rightPills.Children.Add(latB);
+                }
+
+                Border portPill = new Border
+                {
+                    Background = new SolidColorBrush(ColPrimaryLight),
+                    BorderBrush = new SolidColorBrush(ColPrimary),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(5),
+                    Padding = new Thickness(6, 2, 6, 2)
+                };
+                portPill.Child = new TextBlock { Text = "端口 " + port, FontSize = 10.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
+                rightPills.Children.Add(portPill);
+
+                Grid.SetColumn(rightPills, 1);
+                topG.Children.Add(rightPills);
+                cardSp.Children.Add(topG);
+
+                TextBlock tbSub = new TextBlock
+                {
+                    Text = "[" + protocol + "] " + desc,
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(ColTextMuted),
+                    Margin = new Thickness(0, 6, 0, 0)
+                };
+                cardSp.Children.Add(tbSub);
+
+                card.Child = cardSp;
+                Grid.SetRow(card, i / 2);
+                Grid.SetColumn(card, i % 2);
+                grid.Children.Add(card);
+            }
+
+            panelEgressCards.Children.Add(grid);
+        }
+
+        private void SaveAndSyncProxySettings()
+        {
+            string targetMode = (rbProxyModeDefault != null && rbProxyModeDefault.IsChecked == true) ? "default" : "isolated";
+            string subUrl = txtProxySubUrl != null ? txtProxySubUrl.Text.Trim() : "";
+            if (txtProxySyncStatus != null)
+            {
+                txtProxySyncStatus.Text = "正在同步独立通道...";
+                txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+            }
+
+            var requestPayload = new Dictionary<string, object>();
+            requestPayload["mode"] = targetMode;
+            requestPayload["subscriptionUrl"] = subUrl;
+            requestPayload["customNodes"] = customSingleNodes;
+            string reqBody = jsonSerializer.Serialize(requestPayload);
+
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/settings", reqBody);
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    var egressPlan = dict != null && dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
+                    var activation = dict != null && dict.ContainsKey("activation") ? dict["activation"] as Dictionary<string, object> : null;
+                    bool restartRequired = activation != null && activation.ContainsKey("restartRequired") && Convert.ToBoolean(activation["restartRequired"]);
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (txtProxySyncStatus != null)
+                        {
+                            txtProxySyncStatus.Text = restartRequired
+                                ? "⚠️ 配置已写入，等待西游云切换配置或重启后监听端口"
+                                : "✓ 独立出口端口已监听 (" + (egressPlan != null ? egressPlan.Count.ToString() : "0") + " 个；全链路需单独测速)";
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(restartRequired ? ColAmber : ColGreen);
+                        }
+                        RenderEgressPlanCards(egressPlan);
+                        ShowToast(restartRequired ? "配置已写入，等待西游云重新加载" : "✓ 独立端口已开始监听");
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (txtProxySyncStatus != null)
+                        {
+                            txtProxySyncStatus.Text = "⚠️ 同步失败: " + ex.Message;
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        }
+                    });
+                }
+            });
+        }
+
+        private void ShowProxyNodeSelectorDialog()
+        {
+            Window dlg = new Window
+            {
+                Title = "选择 Google 账号登录节点",
+                Width = 520,
+                Height = 390,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = ResizeMode.NoResize,
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(20, 23, 28)),
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(243, 244, 246)),
+                WindowStyle = WindowStyle.ToolWindow,
+            };
+
+            StackPanel sp = new StackPanel { Margin = new Thickness(24) };
+
+            TextBlock tbTitle = new TextBlock
+            {
+                Text = "➕ 登录 Google 账号（选择专属节点）",
+                FontSize = 16,
+                FontWeight = FontWeights.Bold,
+                Foreground = System.Windows.Media.Brushes.White,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            sp.Children.Add(tbTitle);
+
+            TextBlock tbDesc = new TextBlock
+            {
+                Text = "为当前登录会话分配专属节点。网桥将通过独立隔离浏览器启动登录，并为你展示真实出口 IP 确认页。",
+                FontSize = 12,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(156, 163, 175)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 16)
+            };
+            sp.Children.Add(tbDesc);
+
+            TextBlock lblSelect = new TextBlock
+            {
+                Text = "选择代理节点 / 出口 (来自西游云订阅):",
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(209, 213, 219)),
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            sp.Children.Add(lblSelect);
+
+            ComboBox cbNodes = new ComboBox
+            {
+                Height = 36,
+                FontSize = 12.5,
+                Margin = new Thickness(0, 0, 0, 16)
+            };
+
+            // 动态从后端拉取西游云完整真实节点
+            try
+            {
+                string res = SendApiGet("api/proxies/nodes");
+                var list = jsonSerializer.Deserialize<ArrayList>(res);
+                if (list != null && list.Count > 0)
+                {
+                    foreach (var item in list)
+                    {
+                        var dict = item as Dictionary<string, object>;
+                        if (dict != null)
+                        {
+                            string disp = dict.ContainsKey("display") ? dict["display"].ToString() : dict["name"].ToString();
+                            string name = dict["name"].ToString();
+                            int port = dict.ContainsKey("port") ? Convert.ToInt32(dict["port"]) : 7890;
+                            cbNodes.Items.Add(new ProxyNodeItem { Text = disp, Port = port, Name = name });
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            if (cbNodes.Items.Count == 0)
+            {
+                cbNodes.Items.Add(new ProxyNodeItem { Text = "[RULE] 🌐 默认网络（尚未建立独立通道）", Port = 7888, Name = "默认网络 / 规则分流" });
+            }
+
+            cbNodes.SelectedIndex = 0;
+            sp.Children.Add(cbNodes);
+
+            Border tipCard = new Border
+            {
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 255, 255, 255)),
+                BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(40, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 0, 0, 20)
+            };
+            TextBlock tbTip = new TextBlock
+            {
+                Text = "💡 启动后浏览器将自动打开两个标签页：\nTab 1 访问 ip.sb 秒开验证当前真实出口 IP；\nTab 2 访问 Google 登录页。肉眼确认 IP 安全后再输入密码！",
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(156, 163, 175)),
+                TextWrapping = TextWrapping.Wrap
+            };
+            tipCard.Child = tbTip;
+            sp.Children.Add(tipCard);
+
+            StackPanel btnRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            Button btnCancel = CreateButton("取消", ColCardMuted, new SolidColorBrush(ColTextMain), 12);
+            btnCancel.Padding = new Thickness(16, 6, 16, 6);
+            btnCancel.Margin = new Thickness(0, 0, 10, 0);
+            btnCancel.Click += (s, e) => dlg.Close();
+            btnRow.Children.Add(btnCancel);
+
+            Button btnConfirm = CreateButton("🚀 启动安全隔离浏览器登录", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
+            btnConfirm.Padding = new Thickness(18, 6, 18, 6);
+            btnConfirm.Click += (s, e) =>
+            {
+                var sel = cbNodes.SelectedItem as ProxyNodeItem;
+                int port = sel != null ? sel.Port : 7890;
+                string name = sel != null ? sel.Name : "专属静态ISP";
+                dlg.Close();
+                isOAuthPolling = false;
+                StartOAuthLogin(port, name);
+            };
+            btnRow.Children.Add(btnConfirm);
+
+            sp.Children.Add(btnRow);
+            dlg.Content = sp;
+            dlg.ShowDialog();
+        }
+
+        private void StartOAuthLogin(int proxyPort = 7892, string proxyName = "专属静态ISP")
+        {
+            isOAuthPolling = true;
+            ThreadPool.QueueUserWorkItem((state) =>
+            {
+                try
+                {
+                    string reqBody = string.Format("{{\"launchBrowser\":true,\"proxyPort\":{0},\"proxyName\":\"{1}\"}}", proxyPort, proxyName);
+                    string res = SendApiPost("api/oauth/start", reqBody);
                     var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
                     if (dict != null && dict.ContainsKey("url"))
                     {
                         string oauthUrl = dict["url"].ToString();
                         string oauthState = dict.ContainsKey("state") ? dict["state"].ToString() : "";
-                        Process.Start(new ProcessStartInfo(oauthUrl) { UseShellExecute = true });
+
+                        bool serverLaunched = dict.ContainsKey("browser") && dict["browser"] != null;
+                        if (!serverLaunched)
+                        {
+                            Process.Start(new ProcessStartInfo(oauthUrl) { UseShellExecute = true });
+                        }
 
                         if (!string.IsNullOrEmpty(oauthState))
                         {

@@ -33,12 +33,28 @@ import {
 } from "./transaction.mjs";
 import { cleanForeignReasoningItems, readHistoryInventory, syncThreadProvider } from "./history.mjs";
 import { friendlyProxyError, modelCapabilities } from "./protocol.mjs";
+import {
+  identifyCountry,
+  parseCustomIspText,
+  parseCustomNodesList,
+  isValidWorkingNode,
+  parseClashYamlProxies,
+  parseSubscriptionContent,
+  scanLocalClashProfiles,
+  scanLocalSubscriptionUrls,
+  pickRecommendedNodes,
+  buildPlanFromSelectedNodes,
+  buildMultiPortEgressPlan,
+  selectSingaporeRelay,
+  findActivatedEgress,
+  createXiyouOverrideScript,
+} from "./subscription.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
 const CLIPROXY_LOCK_PATH = path.join(ROOT, "cliproxy.lock.json");
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.2.2";
 const UI_HOST = "127.0.0.1";
 const UI_PORT = Number(process.env.BRIDGE_PORT || 8787);
 const DATA_DIR = path.resolve(
@@ -73,6 +89,8 @@ const runtime = {
   accountCache: { at: 0, value: [] },
   modelCache: { at: 0, value: [] },
   historyCache: { at: 0, value: null },
+  egressPlan: [],
+  candidateNodes: [],
   telemetry: {
     totalRequests: 0,
     totalTokens: 0,
@@ -108,6 +126,16 @@ function defaultSettings() {
     defaultModel: "",
     autoRoundRobin: true,
     activeAccountId: "",
+    accountProxies: {},
+    networkSettings: {
+      mode: "isolated",
+      subscriptionUrl: "",
+      customIspText: "",
+      customNodes: [],
+      selectedNodes: [],
+      egressPlan: [],
+      lastSyncedAt: null,
+    },
     codexActiveBackup: "",
     codexApiPrepared: false,
     clientKey: randomKey("agc"),
@@ -144,10 +172,17 @@ async function initialize() {
   runtime.settings = {
     ...defaults,
     ...stored,
+    networkSettings: {
+      ...defaults.networkSettings,
+      ...(stored.networkSettings || {}),
+    },
     clientKey: stored.clientKey || defaults.clientKey,
     managementKey: stored.managementKey || defaults.managementKey,
     uiKey: stored.uiKey || defaults.uiKey,
   };
+  runtime.egressPlan = Array.isArray(runtime.settings.networkSettings.egressPlan)
+    ? runtime.settings.networkSettings.egressPlan
+    : [];
   runtime.quotas = await readJson(QUOTA_CACHE_PATH, {});
   await saveSettings();
   await recoverInterruptedTakeover();
@@ -158,9 +193,30 @@ function redact(value) {
     .replace(/(authorization[:=]\s*bearer\s+)[^\s"']+/gi, "$1[redacted]")
     .replace(/("(?:access_token|refresh_token|id_token)"\s*:\s*")[^"]+/gi, "$1[redacted]")
     .replace(/([?&](?:code|token)=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/("(?:password|username|proxy_url)"\s*:\s*")[^"]+/gi, "$1[redacted]")
     .replace(/\bag(?:c|m|ui)_[A-Za-z0-9_-]+\b/g, "[redacted-key]")
     .replace(/\b[A-Z]:\\Users\\[^\\\s]+/gi, "%USERPROFILE%")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]");
+}
+
+function publicEgressPlan(plan = []) {
+  return plan.map(({ sourceProxy, ...item }) => item);
+}
+
+function publicNetworkSettings(settings = {}) {
+  const accountSettings = settings.accountSettings
+    ? {
+        apiBaseUrl: settings.accountSettings.apiBaseUrl || "",
+        email: settings.accountSettings.email || "",
+        hasSession: Boolean(settings.accountSettings.subscriptionUrl),
+        lastSyncedAt: settings.accountSettings.lastSyncedAt || null,
+      }
+    : null;
+  return {
+    ...settings,
+    accountSettings,
+    egressPlan: undefined,
+  };
 }
 
 function parseLogTelemetry(message) {
@@ -211,7 +267,7 @@ function addError(scope, error) {
 
 function publicSettings() {
   const { clientKey, managementKey, uiKey, ...safe } = runtime.settings;
-  return safe;
+  return { ...safe, networkSettings: publicNetworkSettings(safe.networkSettings) };
 }
 
 function validateSettings(input) {
@@ -628,6 +684,12 @@ async function getAccounts(force = false) {
         healthMessage = account.status_message || q?.message || "账号暂不可用";
       }
 
+      const accountKey = account.email || account.name || account.id || "";
+      const assignedProxy = runtime.settings.accountProxies?.[accountKey]
+        || runtime.settings.accountProxies?.[account.id]
+        || runtime.settings.accountProxies?.[account.name]
+        || null;
+
       return {
         id: account.id || account.name,
         authIndex: account.auth_index || "",
@@ -644,6 +706,7 @@ async function getAccounts(force = false) {
         lastRefresh: account.last_refresh || account.updated_at || account.modtime || null,
         source: account.source || "file",
         quota: q,
+        assignedProxy,
       };
     });
   runtime.accountCache = { at: Date.now(), value: accounts };
@@ -826,10 +889,85 @@ async function toggleAccount(name, disabled) {
 }
 
 async function deleteAccount(name) {
-  await proxyRequest(`/auth-files?name=${encodeURIComponent(name)}`, { management: true, method: "DELETE" });
+  try {
+    await proxyRequest(`/auth-files?name=${encodeURIComponent(name)}`, { management: true, method: "DELETE" });
+  } catch {}
+
+  const cleanEmail = extractCleanEmail(name);
+  const candidates = [
+    path.join(AUTH_DIR, name),
+    path.join(AUTH_DIR, `${name}.json`),
+    path.join(AUTH_DIR, `antigravity-${name}.json`),
+    path.join(AUTH_DIR, `antigravity-${name}`),
+    path.join(AUTH_DIR, `antigravity-${cleanEmail}.json`),
+  ];
+  for (const c of candidates) {
+    if (fsSync.existsSync(c)) {
+      try { await fs.rm(c, { force: true }); } catch {}
+    }
+  }
+
+  if (runtime.settings.accountProxies) {
+    delete runtime.settings.accountProxies[name];
+    if (cleanEmail) delete runtime.settings.accountProxies[cleanEmail];
+    await saveSettings();
+  }
+
+  if (runtime.settings.activeAccountId && (runtime.settings.activeAccountId.includes(name) || (cleanEmail && runtime.settings.activeAccountId.includes(cleanEmail)))) {
+    const remaining = await getAccounts(true);
+    runtime.settings.activeAccountId = remaining[0]?.id || "";
+    await saveSettings();
+  }
+
   runtime.accountCache.at = 0;
   runtime.modelCache.at = 0;
   addLog("account", `已删除本地凭据 ${name}`, "warn");
+}
+
+function accountIdentityKeys(account) {
+  return [account?.name, account?.id, account?.email, account?.authIndex]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function findAccountAuthFile(account) {
+  const keys = new Set(accountIdentityKeys(account));
+  if (keys.size === 0) return "";
+  let files = [];
+  try { files = await fs.readdir(AUTH_DIR); } catch { return ""; }
+
+  for (const file of files.filter((name) => name.endsWith(".json"))) {
+    const filePath = path.join(AUTH_DIR, file);
+    const fileKey = file.toLowerCase();
+    if ([...keys].some((key) => fileKey === key || fileKey === `${key}.json` || fileKey === `antigravity-${key}.json`)) {
+      return filePath;
+    }
+  }
+
+  for (const file of files.filter((name) => name.endsWith(".json"))) {
+    const filePath = path.join(AUTH_DIR, file);
+    try {
+      const payload = await readJson(filePath, {});
+      const payloadKeys = accountIdentityKeys({
+        name: payload.name,
+        id: payload.id,
+        email: payload.email,
+        authIndex: payload.auth_index,
+      });
+      if (payloadKeys.some((key) => keys.has(key))) return filePath;
+    } catch {}
+  }
+  return "";
+}
+
+async function setAccountProxyUrl(account, port = 0) {
+  const authFilePath = await findAccountAuthFile(account);
+  if (!authFilePath) throw new Error(`未找到账号 ${account?.email || account?.name || account?.id || ""} 的本地 OAuth 凭据文件`);
+  const authObj = JSON.parse(await fs.readFile(authFilePath, "utf8"));
+  if (port > 0) authObj.proxy_url = `http://127.0.0.1:${port}`;
+  else delete authObj.proxy_url;
+  await atomicWrite(authFilePath, JSON.stringify(authObj, null, 2));
+  return authFilePath;
 }
 
 async function applyAccountRouting() {
@@ -861,12 +999,614 @@ async function applyAccountRouting() {
   }
 }
 
-async function startOAuth() {
+const pendingOAuthStates = new Map();
+
+function getClashConfigDir() {
+  const candidates = [
+    path.join(os.homedir(), "AppData", "Roaming", "com.appshub", "XiyouYun"),
+    path.join(os.homedir(), "AppData", "Roaming", "com.follow", "clash"),
+  ];
+  for (const c of candidates) {
+    if (fsSync.existsSync(path.join(c, "shared_preferences.json"))) return c;
+  }
+  return candidates[0];
+}
+
+async function detectActiveProxyPort() {
+  const tryPorts = [7888, 7890, 7891, 7892];
+  for (const p of tryPorts) {
+    if (await canConnect(p)) return p;
+  }
+  return 7888;
+}
+
+async function fetchSubscriptionText(url, userAgent = "ClashMeta/v1.18.0 (XiyouYun)") {
+  let directError = null;
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": userAgent },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (response.ok) return await response.text();
+    directError = new Error(`HTTP ${response.status} ${response.statusText}`);
+  } catch (error) {
+    directError = error;
+  }
+
+  try {
+    const proxyPort = await detectActiveProxyPort();
+    const { stdout } = await execFileAsync("curl.exe", [
+      "--silent",
+      "--show-error",
+      "--fail",
+      "--location",
+      "--compressed",
+      "--max-time",
+      "12",
+      "--proxy",
+      `http://127.0.0.1:${proxyPort}`,
+      "--user-agent",
+      userAgent,
+      url,
+    ], {
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: 15_000,
+      windowsHide: true,
+    });
+    if (stdout) return stdout;
+    throw new Error("订阅响应为空");
+  } catch (proxyError) {
+    const directMessage = directError?.message || "未知错误";
+    throw new Error(`订阅直连失败: ${directMessage}；本地代理重试失败: ${proxyError.message}`);
+  }
+}
+
+async function fetchFirstValidSubscription(urls = []) {
+  let lastError = null;
+  for (const url of [...new Set(urls.filter(Boolean))]) {
+    try {
+      const text = await fetchSubscriptionText(url);
+      const parsedNodes = parseSubscriptionContent(text);
+      if (parsedNodes.length > 0) return { url, text, parsedNodes };
+      lastError = new Error("订阅响应中没有可解析节点");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  return { url: "", text: "", parsedNodes: [] };
+}
+
+async function loadLocalSessionNodes() {
+  const profileNodes = scanLocalClashProfiles();
+  if (profileNodes.length > 0) return { parsedNodes: profileNodes, subscriptionUrl: "", source: "local-profile" };
+
+  const sessionUrls = scanLocalSubscriptionUrls();
+  if (sessionUrls.length === 0) return { parsedNodes: [], subscriptionUrl: "", source: "none" };
+  try {
+    const fetched = await fetchFirstValidSubscription(sessionUrls);
+    return { parsedNodes: fetched.parsedNodes, subscriptionUrl: fetched.url, source: "local-session" };
+  } catch {
+    return { parsedNodes: [], subscriptionUrl: "", source: "none" };
+  }
+}
+
+/**
+ * 真实 HTTP/HTTPS 代理通道端到端握手与往返实测
+ */
+export function measureHttpProxyRealLatency(proxyPort, targetHost = "cp.cloudflare.com", timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const socket = new net.Socket();
+    let isResolved = false;
+
+    const done = (val) => {
+      if (!isResolved) {
+        isResolved = true;
+        socket.removeAllListeners();
+        socket.destroy();
+        resolve(val);
+      }
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.on("timeout", () => done(-1));
+    socket.on("error", () => done(-1));
+
+    let responseBuffer = "";
+    socket.connect(proxyPort, "127.0.0.1", () => {
+      const reqStr = `GET http://${targetHost}/generate_204 HTTP/1.1\r\nHost: ${targetHost}\r\nProxy-Connection: close\r\n\r\n`;
+      socket.write(reqStr);
+      socket.on("data", (chunk) => {
+        responseBuffer += chunk.toString("latin1");
+        if (!responseBuffer.includes("\r\n")) return;
+        const status = Number(responseBuffer.match(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/i)?.[1] || 0);
+        done(status >= 200 && status < 400 ? Date.now() - start : -1);
+      });
+    });
+  });
+}
+
+export async function pingNodesList(nodes = []) {
+  const results = {};
+  const measurements = {};
+  await Promise.all(
+    nodes.map(async (n) => {
+      const key = String(n.id || n.name || n.port || "");
+      if (!key) return;
+
+      // 候选节点若已绑定独立 Listener，直接测这个 Listener 的真实代理全链路。
+      const activeEgress = findActivatedEgress(n, runtime.egressPlan);
+      if (activeEgress) {
+        const realChannelRtt = await measureHttpProxyRealLatency(activeEgress.port);
+        results[key] = realChannelRtt;
+        measurements[key] = { valueMs: realChannelRtt, kind: "channel", label: "通道全链路", ok: realChannelRtt > 0 };
+        return;
+      }
+
+      // 本地 Listener 端口测量的是包含中转与落地在内的真实 HTTP 全链路。
+      if (n.port && !n.server) {
+        const realChannelRtt = await measureHttpProxyRealLatency(n.port);
+        results[key] = realChannelRtt;
+        measurements[key] = { valueMs: realChannelRtt, kind: "channel", label: "通道全链路", ok: realChannelRtt > 0 };
+        return;
+      }
+
+      // 未激活的订阅节点没有可独立选路的本地端口；入口 TCP 数字不再冒充节点延迟。
+      if (n.server && n.port) {
+        results[key] = 0;
+        measurements[key] = { valueMs: 0, kind: "inactive", label: "未激活，暂无全链路数据", ok: false };
+        return;
+      }
+
+      results[key] = -1;
+      measurements[key] = { valueMs: -1, kind: "unavailable", label: "不可测", ok: false };
+    })
+  );
+  return { ok: true, latencies: results, measurements };
+}
+
+function normalizeApiBaseUrl(raw) {
+  let url = String(raw || "").trim();
+  if (!url) url = "https://xyapi.kilxs.cn/api/v1";
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  url = url.replace(/\/+$/, "");
+  if (!url.endsWith("/api/v1")) {
+    url = url + "/api/v1";
+  }
+  return url;
+}
+
+async function loginAndFetchAccountSubscription({ apiBaseUrl, email, password }) {
+  const normUrl = normalizeApiBaseUrl(apiBaseUrl);
+  if (!email || !password) {
+    throw new Error("请输入账号(邮箱)和密码");
+  }
+
+  addLog("network", `正在通过官方 API (${normUrl}) 进行账号鉴权...`);
+
+  const loginResp = await fetch(`${normUrl}/passport/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "Dart/3.0 (dart:io)",
+    },
+    body: JSON.stringify({ email: String(email).trim(), password: String(password).trim() }),
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  const loginJson = await loginResp.json().catch(() => ({}));
+  const token = String(
+    loginJson?.data?.token
+      || loginJson?.data?.auth_data
+      || loginJson?.token
+      || loginJson?.auth_data
+      || "",
+  ).trim();
+  if (!loginResp.ok || !token) {
+    let errMsg = loginJson.message || "";
+    if (loginJson.errors) {
+      try {
+        const errValues = Object.keys(loginJson.errors).map((k) => loginJson.errors[k]).flat();
+        if (errValues.length > 0) errMsg = errValues.join("；");
+      } catch {}
+    }
+    if (!errMsg) errMsg = `登录失败 (HTTP ${loginResp.status})`;
+
+    // 如果官方 API 限制重试或报错，自动使用本地西游云已登录的会话节点进行无缝兜底
+    const localSession = await loadLocalSessionNodes();
+    if (localSession.parsedNodes.length > 0) {
+      addLog("network", `官方 API 提示 [${errMsg}]，已自动为您启用本地西游云已登录会话中的 ${localSession.parsedNodes.length} 个节点`, "warn");
+      return {
+        ok: true,
+        token: "",
+        subscriptionUrl: localSession.subscriptionUrl,
+        apiBaseUrl: normUrl,
+        email,
+        parsedNodes: localSession.parsedNodes,
+        warning: `官方提示：${errMsg}。已自动关联本地西游云已登录会话，载入 ${localSession.parsedNodes.length} 个节点。`,
+      };
+    }
+
+    throw new Error(errMsg);
+  }
+
+  addLog("network", `账号登录成功，正在换取最新全量订阅配置...`);
+
+  // 尝试多种常见的 V2Board 订阅格式与地址
+  const subUrls = [
+    `https://xysuburl.kilxs.cn/api/v1/client/secureSubscribe?token=${token}`,
+    `https://xysuburl.kilxs.cn/api/v1/client/subscribe?token=${token}&flag=clash`,
+    `${normUrl}/client/subscribe?token=${token}&flag=clash`,
+    `${normUrl}/client/secureSubscribe?token=${token}`,
+  ];
+
+  let fetchedSubscription = null;
+  try {
+    fetchedSubscription = await fetchFirstValidSubscription(subUrls);
+  } catch {}
+
+  // 如果云端拉取遇到防火墙，自动用本地已缓存的登录会话作为双保险补充
+  let parsedNodes = fetchedSubscription?.parsedNodes || [];
+  let subscriptionUrl = fetchedSubscription?.url || "";
+  if (parsedNodes.length === 0) {
+    const localSession = await loadLocalSessionNodes();
+    if (localSession.parsedNodes.length > 0) {
+      parsedNodes = localSession.parsedNodes;
+      subscriptionUrl = localSession.subscriptionUrl;
+      addLog("network", `在线拉取受阻，已自动从本地客户端载入 ${parsedNodes.length} 个最新节点`);
+    }
+  }
+
+  if (parsedNodes.length === 0) {
+    throw new Error("成功登录，但未能获取到有效出海节点，请检查网络或稍后重试");
+  }
+
+  return {
+    ok: true,
+    token,
+    subscriptionUrl,
+    apiBaseUrl: normUrl,
+    email,
+    parsedNodes,
+  };
+}
+
+async function fetchSubscriptionCandidateNodes(forceUrl = null, forceCustomIsp = null, accountCreds = null, forceCustomNodes = null) {
+  const netSettings = runtime.settings.networkSettings || {
+    mode: "isolated",
+    subscriptionUrl: "",
+    customIspText: "",
+    customNodes: [],
+    lastSyncedAt: null,
+  };
+
+  const url = (forceUrl !== null ? forceUrl : netSettings.subscriptionUrl || "").trim();
+  const customIspInput = (forceCustomIsp !== null ? forceCustomIsp : netSettings.customIspText || "").trim();
+  let parsedNodes = [];
+
+  let fetchError = "";
+
+  // 1. 如果是账号直连托管模式，优先向官方 API 拉取
+  const acc = accountCreds || netSettings.accountSettings;
+  if (acc?.subscriptionUrl) {
+    try {
+      const sessionResult = await fetchFirstValidSubscription([acc.subscriptionUrl]);
+      parsedNodes = sessionResult.parsedNodes;
+      addLog("network", `已通过保存的西游云会话更新 ${parsedNodes.length} 个节点`);
+    } catch (error) {
+      fetchError = error.message;
+    }
+  }
+  if (parsedNodes.length === 0 && acc && acc.email && acc.password) {
+    try {
+      const accRes = await loginAndFetchAccountSubscription({
+        apiBaseUrl: acc.apiBaseUrl,
+        email: acc.email,
+        password: acc.password,
+      });
+      if (accRes.parsedNodes && accRes.parsedNodes.length > 0) {
+        parsedNodes = accRes.parsedNodes;
+        addLog("network", `已通过官方账号 (${acc.email}) 成功获取 ${parsedNodes.length} 个最新节点`);
+      }
+    } catch (eAcc) {
+      fetchError = eAcc.message;
+      addLog("network", `官方账号登录同步失败: ${eAcc.message}`, "warn");
+    }
+  }
+
+  // 2. 如果有订阅 URL 且尚未拉到节点，尝试在线拉取 (支持直连与本地代理重试)
+  if (parsedNodes.length === 0 && url) {
+    try {
+      const fetched = await fetchFirstValidSubscription([url]);
+      parsedNodes = fetched.parsedNodes;
+      addLog("network", `成功拉取订阅，解析到 ${parsedNodes.length} 个原始节点`);
+    } catch (e) {
+      fetchError = e.message;
+      addLog("network", `订阅拉取失败: ${e.message}`, "warn");
+    }
+  }
+
+  // 2. 如果远程未拉到，全量扫描本地所有 Clash / Follow / 西游云 客户端的配置文件兜底
+  if (parsedNodes.length === 0) {
+    try {
+      const localSession = await loadLocalSessionNodes();
+      if (localSession.parsedNodes.length > 0) {
+        parsedNodes = localSession.parsedNodes;
+        addLog("network", `已从本地 Clash/Follow 客户端配置文件中成功载入 ${parsedNodes.length} 个节点`);
+      }
+    } catch (e) {
+      addLog("network", `扫描本地 Clash 配置文件失败: ${e.message}`, "warn");
+    }
+  }
+
+  const allCandidates = [];
+  const customList = parseCustomNodesList(forceCustomNodes || netSettings.customNodes || customIspInput);
+  for (const cNode of customList) {
+    allCandidates.push(cNode);
+  }
+  allCandidates.push(...parsedNodes);
+
+  // 自动排除不受支持地区（香港等），打标签并优选推荐 Top 5
+  const scoredNodes = pickRecommendedNodes(allCandidates, 5);
+  runtime.candidateNodes = scoredNodes;
+
+  const isFallback = parsedNodes.length === 0;
+  return {
+    ok: true,
+    nodes: scoredNodes,
+    totalCount: allCandidates.length,
+    supportedCount: scoredNodes.length,
+    recommendedCount: scoredNodes.filter((n) => n.recommended).length,
+    isFallback,
+    fetchError: isFallback ? (fetchError || "没有从官网、订阅链接或本地登录会话读取到真实节点") : "",
+  };
+}
+
+async function applySelectedNodes(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
+  const netSettings = { ...(runtime.settings.networkSettings || {}) };
+  if (forceUrl !== null) netSettings.subscriptionUrl = String(forceUrl).trim();
+  if (forceCustomIsp !== null) netSettings.customIspText = String(forceCustomIsp).trim();
+  if (forceCustomNodes !== null) netSettings.customNodes = forceCustomNodes;
+  netSettings.mode = "isolated";
+  netSettings.lastSyncedAt = new Date().toISOString();
+
+  let nodesToApply = selectedNodes;
+  if (!nodesToApply || nodesToApply.length === 0) {
+    const fetched = await fetchSubscriptionCandidateNodes(netSettings.subscriptionUrl, netSettings.customIspText, null, netSettings.customNodes);
+    nodesToApply = fetched.nodes.filter((n) => n.recommended);
+  }
+  if (nodesToApply.length === 0) throw new Error("没有可激活的真实节点");
+
+  let relay = selectSingaporeRelay([...nodesToApply, ...runtime.candidateNodes]);
+  if (nodesToApply.some((node) => node.isCustomIsp) && !relay) {
+    try {
+      const fetched = await fetchSubscriptionCandidateNodes(
+        netSettings.subscriptionUrl,
+        netSettings.customIspText,
+        null,
+        netSettings.customNodes,
+      );
+      relay = selectSingaporeRelay(fetched.nodes);
+    } catch {}
+  }
+  if (nodesToApply.some((node) => node.isCustomIsp) && !relay) {
+    throw new Error("住宅 ISP 必须经过新加坡专线，但当前节点列表中没有找到新加坡 IEPL/IPLC/专线节点");
+  }
+
+  const egressPlan = buildPlanFromSelectedNodes(nodesToApply, 7892, { relayNodeName: relay?.name || "" });
+  // 先成功备份并写入西游云，再提交 Bridge 的激活状态，避免注入失败后留下假计划。
+  const injection = await injectXiyouyunRelayScript(egressPlan);
+  runtime.egressPlan = egressPlan;
+  netSettings.selectedNodes = nodesToApply;
+  netSettings.egressPlan = egressPlan;
+  netSettings.relayNodeName = relay?.name || "";
+  runtime.settings.networkSettings = netSettings;
+  await saveSettings();
+
+  const ports = await Promise.all(egressPlan.map(async (item) => ({ port: item.port, ready: await canConnect(item.port) })));
+  const readyPorts = ports.filter((item) => item.ready).map((item) => item.port);
+  const pendingPorts = ports.filter((item) => !item.ready).map((item) => item.port);
+
+  addLog("network", pendingPorts.length > 0
+    ? `已写入 ${egressPlan.length} 个独立通道；等待西游云重新加载配置的端口: ${pendingPorts.join(", ")}`
+    : `已写入配置，${egressPlan.length} 个独立端口正在监听`);
+  return {
+    ok: true,
+    egressPlan: publicEgressPlan(egressPlan),
+    networkSettings: publicNetworkSettings(netSettings),
+    activation: {
+      readyPorts,
+      pendingPorts,
+      restartRequired: pendingPorts.length > 0,
+      preferencesPath: injection.preferencesPath,
+      backupPath: injection.backupPath,
+    },
+  };
+}
+
+export async function injectXiyouyunRelayScript(egressPlan = []) {
+  try {
+    const prefsPath = path.join(getClashConfigDir(), "shared_preferences.json");
+    if (!fsSync.existsSync(prefsPath)) throw new Error(`未找到西游云配置文件: ${prefsPath}`);
+
+    const rawText = await fs.readFile(prefsPath, "utf8");
+    const rawObj = JSON.parse(rawText);
+    const flutterConfig = JSON.parse(rawObj["flutter.config"] || "{}");
+    const scriptCode = createXiyouOverrideScript(egressPlan);
+
+    const scriptId = "abc-multi-proxy-script";
+    const scriptItem = {
+      id: scriptId,
+      label: "Antigravity多端口并发代理脚本",
+      content: scriptCode,
+      url: null,
+    };
+
+    if (!flutterConfig.scriptProps) {
+      flutterConfig.scriptProps = { currentId: scriptId, scripts: [scriptItem] };
+    } else {
+      flutterConfig.scriptProps.currentId = scriptId;
+      if (!flutterConfig.scriptProps.scripts) flutterConfig.scriptProps.scripts = [];
+      const existingIdx = flutterConfig.scriptProps.scripts.findIndex(s => s.id === scriptId || s.label === scriptItem.label);
+      if (existingIdx >= 0) {
+        flutterConfig.scriptProps.scripts[existingIdx] = scriptItem;
+      } else {
+        flutterConfig.scriptProps.scripts.push(scriptItem);
+      }
+    }
+
+    rawObj["flutter.config"] = JSON.stringify(flutterConfig);
+    const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+    const backupPath = path.join(path.dirname(prefsPath), `shared_preferences_backup_abc_${stamp}.json`);
+    await fs.copyFile(prefsPath, backupPath);
+    await atomicWrite(prefsPath, JSON.stringify(rawObj));
+    addLog("network", `已成功将多端口独立通道与新加坡专线链式挂载脚本写入西游云！`);
+    return { ok: true, preferencesPath: prefsPath, backupPath };
+  } catch (e) {
+    addLog("network", `写入西游云脚本失败: ${e.message}`, "warn");
+    throw e;
+  }
+}
+
+async function syncSubscriptionNodes(forceUrl = null, forceCustomIsp = null) {
+  const fetched = await fetchSubscriptionCandidateNodes(forceUrl, forceCustomIsp);
+  const recommended = fetched.nodes.filter((n) => n.recommended);
+  return applySelectedNodes(recommended, forceUrl, forceCustomIsp);
+}
+
+async function getAvailableProxyNodes() {
+  const activePort = await detectActiveProxyPort();
+  const netSettings = runtime.settings.networkSettings || { mode: "isolated" };
+
+  // 模式 1：默认网络模式 (0配置，直接跟随系统/西游云主界面)
+  if (netSettings.mode === "default") {
+    return [
+      {
+        id: "default",
+        name: "默认网络 / 规则分流",
+        protocol: "RULE",
+        country: "🌐",
+        port: activePort,
+        desc: "跟随系统或代理软件当前选中的生效节点",
+        display: `[RULE] 🌐 默认网络（跟随系统/代理软件当前生效节点） [端口 ${activePort}]`,
+      },
+    ];
+  }
+
+  // 模式 2：高级多出口隔离模式
+  if (!runtime.egressPlan || runtime.egressPlan.length === 0) {
+    try {
+      await syncSubscriptionNodes();
+    } catch (error) {
+      addLog("network", `未能恢复独立通道: ${error.message}`, "warn");
+    }
+  }
+
+  const result = publicEgressPlan(runtime.egressPlan || []);
+  result.push({
+    id: "default",
+    name: "默认网络 / 规则分流",
+    protocol: "RULE",
+    country: "🌐",
+    port: activePort,
+    desc: "跟随西游云当前选中的节点",
+    display: `[RULE] 🌐 默认网络（跟随西游云当前生效节点） [端口 ${activePort}]`,
+  });
+
+  return result;
+}
+
+function findBrowserPath() {
+  const candidates = [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    path.join(os.homedir(), "AppData", "Local", "Google", "Chrome", "Application", "chrome.exe"),
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    path.join(os.homedir(), "AppData", "Local", "Microsoft", "Edge", "Application", "msedge.exe"),
+  ];
+  for (const p of candidates) {
+    if (fsSync.existsSync(p)) return p;
+  }
+  return null;
+}
+
+async function launchSafeBrowser({ authUrl, proxyPort, nodeName }) {
+  const browserPath = findBrowserPath();
+  if (!browserPath) {
+    throw new Error("未在系统中找到 Chrome 或 Edge 浏览器，请手动复制授权链接在浏览器中打开");
+  }
+
+  const requestedPort = Number(proxyPort) || 0;
+  let effectivePort = requestedPort;
+
+  // 显式账号端口绝不回退到其他出口，否则 OAuth 登录 IP 与后续 API IP 会串线。
+  if (requestedPort > 0) {
+    const isTargetAlive = await canConnect(requestedPort);
+    if (!isTargetAlive) {
+      throw new Error(`专属代理端口 ${requestedPort} 尚未监听；请先让西游云重新加载 Antigravity 覆写脚本`);
+    }
+  } else {
+    effectivePort = await detectActiveProxyPort();
+  }
+
+  const tempProfile = path.join(os.tmpdir(), `abc-oauth-profile-${effectivePort || "default"}-${Date.now()}`);
+  const args = [
+    `--user-data-dir=${tempProfile}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+  ];
+
+  if (effectivePort > 0) {
+    args.push(`--proxy-server=http://127.0.0.1:${effectivePort}`);
+  }
+
+  args.push("https://ip.sb");
+  args.push(authUrl);
+
+  const child = spawn(browserPath, args, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+
+  addLog("oauth", `已调起隔离安全浏览器（节点: ${nodeName || "默认"}, 生效端口: ${effectivePort || "系统默认"}）`);
+  return { launched: true, browser: path.basename(browserPath), port: effectivePort };
+}
+
+async function startOAuth(options = {}) {
   await startProxy();
+  const proxyPort = Number(options.proxyPort) || 0;
+  const proxyName = String(options.proxyName || "").trim();
+  if (proxyPort > 0 && !await canConnect(proxyPort)) {
+    throw new Error(`专属代理端口 ${proxyPort} 尚未监听；请先激活通道并让西游云重新加载配置`);
+  }
+  const existingAccounts = await getAccounts(true).catch(() => []);
   const payload = await proxyRequest("/antigravity-auth-url?is_webui=true", { management: true });
   if (!payload.url || !payload.state) throw new Error("CLIProxyAPI 未返回 OAuth 地址");
-  addLog("oauth", "已创建 Antigravity OAuth 登录会话");
-  return { url: payload.url, state: payload.state };
+
+  if (payload.state) {
+    pendingOAuthStates.set(payload.state, {
+      proxyPort,
+      proxyName,
+      existingAccountKeys: existingAccounts.flatMap(accountIdentityKeys),
+      createdAt: Date.now(),
+    });
+  }
+
+  let browserResult = null;
+  if (options.launchBrowser) {
+    browserResult = await launchSafeBrowser({
+      authUrl: payload.url,
+      proxyPort,
+      nodeName: proxyName,
+    });
+  }
+
+  addLog("oauth", `已创建 Antigravity OAuth 登录会话${proxyName ? ` (指定节点: ${proxyName})` : ""}`);
+  return { url: payload.url, state: payload.state, browser: browserResult };
 }
 
 async function oauthStatus(state) {
@@ -874,6 +1614,34 @@ async function oauthStatus(state) {
   if (payload.status === "ok") {
     runtime.accountCache.at = 0;
     runtime.modelCache.at = 0;
+
+    const pending = pendingOAuthStates.get(state);
+    if (pending && pending.proxyName) {
+      const accounts = await getAccounts(true);
+      if (accounts.length > 0) {
+        const existingKeys = new Set(pending.existingAccountKeys || []);
+        const target = accounts.find((account) => accountIdentityKeys(account).every((key) => !existingKeys.has(key)))
+          || [...accounts].sort((a, b) => Date.parse(b.lastRefresh || 0) - Date.parse(a.lastRefresh || 0))[0];
+        if (target) {
+          if (!runtime.settings.accountProxies) runtime.settings.accountProxies = {};
+          runtime.settings.accountProxies[target.email || target.id] = {
+            name: pending.proxyName,
+            port: pending.proxyPort,
+            boundAt: new Date().toISOString(),
+          };
+          await saveSettings();
+
+          // 同步写入 auth json 文件中的 proxy_url，让 CLIProxyAPI 转发该账号请求时走专属端口
+          if (pending.proxyPort > 0) {
+            await setAccountProxyUrl(target, pending.proxyPort);
+          }
+
+          addLog("oauth", `账号 ${target.email || target.id} 已成功绑定节点: ${pending.proxyName} (出口端口 ${pending.proxyPort})`);
+        }
+      }
+      pendingOAuthStates.delete(state);
+    }
+
     addLog("oauth", "Google OAuth 登录完成");
   }
   return payload;
@@ -1589,11 +2357,103 @@ async function handleApi(request, response, url) {
   if (key === "GET /api/dashboard") result = await dashboard();
   else if (key === "GET /api/history") result = await getHistory(true);
   else if (key === "GET /api/proxy/compatibility") result = await inspectProxyCompatibility(true);
+  else if (key === "GET /api/proxies/nodes") result = await getAvailableProxyNodes();
+  else if (key === "GET /api/network/settings") {
+    const netSettings = runtime.settings.networkSettings || {
+      mode: "isolated",
+      subscriptionUrl: "",
+      customIspText: "",
+      customNodes: [],
+      lastSyncedAt: null,
+    };
+    result = { ok: true, networkSettings: publicNetworkSettings(netSettings), egressPlan: publicEgressPlan(runtime.egressPlan || []) };
+  } else if (key === "POST /api/network/settings") {
+    const body = await readBody(request);
+    const netSettings = runtime.settings.networkSettings || {};
+    if (body.mode) netSettings.mode = body.mode === "default" ? "default" : "isolated";
+    if (body.subscriptionUrl !== undefined) netSettings.subscriptionUrl = String(body.subscriptionUrl).trim();
+    if (body.customIspText !== undefined) netSettings.customIspText = String(body.customIspText).trim();
+    if (Array.isArray(body.customNodes)) netSettings.customNodes = body.customNodes;
+    runtime.settings.networkSettings = netSettings;
+
+    if (netSettings.mode === "default") {
+      try {
+        const files = await fs.readdir(AUTH_DIR);
+        for (const file of files) {
+          if (file.endsWith(".json")) {
+            const fp = path.join(AUTH_DIR, file);
+            const obj = JSON.parse(await fs.readFile(fp, "utf8"));
+            if (obj.proxy_url) {
+              delete obj.proxy_url;
+              await fs.writeFile(fp, JSON.stringify(obj, null, 2), "utf8");
+            }
+          }
+        }
+      } catch {}
+      await saveSettings();
+      result = { ok: true, networkSettings: publicNetworkSettings(netSettings), egressPlan: publicEgressPlan(runtime.egressPlan || []) };
+    } else {
+      await saveSettings();
+      result = await syncSubscriptionNodes(netSettings.subscriptionUrl, netSettings.customIspText);
+      setTimeout(() => { refreshQuota().catch(() => {}); }, 300);
+    }
+  } else if (key === "POST /api/network/account-login") {
+    const body = await readBody(request).catch(() => ({}));
+    const { apiBaseUrl, email, password } = body;
+    try {
+      const res = await loginAndFetchAccountSubscription({ apiBaseUrl, email, password });
+
+      if (!runtime.settings.networkSettings) runtime.settings.networkSettings = {};
+      runtime.settings.networkSettings.importMode = "account";
+      runtime.settings.networkSettings.accountSettings = {
+        apiBaseUrl: res.apiBaseUrl,
+        email: res.email,
+        subscriptionUrl: res.subscriptionUrl,
+        lastSyncedAt: new Date().toISOString(),
+      };
+      if (Array.isArray(body.customNodes)) runtime.settings.networkSettings.customNodes = body.customNodes;
+      await saveSettings();
+
+      const scoredNodes = pickRecommendedNodes([
+        ...parseCustomNodesList(body.customNodes || []),
+        ...res.parsedNodes,
+      ], 5);
+      runtime.candidateNodes = scoredNodes;
+      result = {
+        ok: true,
+        message: `成功登录官方账号 (${res.email}) 并拉取 ${res.parsedNodes.length} 个出海节点`,
+        warning: res.warning || "",
+        nodes: scoredNodes,
+        totalCount: scoredNodes.length,
+        supportedCount: scoredNodes.length,
+        recommendedCount: scoredNodes.filter((n) => n.recommended).length,
+      };
+    } catch (e) {
+      result = {
+        ok: false,
+        error: e.message,
+      };
+    }
+  } else if (key === "POST /api/network/fetch-nodes") {
+    const body = await readBody(request).catch(() => ({}));
+    result = await fetchSubscriptionCandidateNodes(body.subscriptionUrl || null, body.customIspText || null, body.accountCreds || null, body.customNodes || null);
+  } else if (key === "POST /api/network/apply-nodes") {
+    const body = await readBody(request).catch(() => ({}));
+    result = await applySelectedNodes(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
+  } else if (key === "POST /api/network/ping") {
+    const body = await readBody(request).catch(() => ({}));
+    result = await pingNodesList(body.nodes || []);
+  } else if (key === "POST /api/network/sync") {
+    const body = await readBody(request).catch(() => ({}));
+    result = await syncSubscriptionNodes(body.subscriptionUrl || null, body.customIspText || null);
+  }
   else if (key === "POST /api/proxy/install") result = await installProxy();
   else if (key === "POST /api/proxy/start") result = await startProxy();
   else if (key === "POST /api/proxy/stop") result = await stopProxy();
-  else if (key === "POST /api/oauth/start") result = await startOAuth();
-  else if (key === "GET /api/oauth/status") result = await oauthStatus(url.searchParams.get("state") || "");
+  else if (key === "POST /api/oauth/start") {
+    const body = await readBody(request).catch(() => ({}));
+    result = await startOAuth(body);
+  } else if (key === "GET /api/oauth/status") result = await oauthStatus(url.searchParams.get("state") || "");
   else if (key === "POST /api/quota/refresh") {
     const body = await readBody(request);
     result = await refreshQuota(body.authIndex || "");
@@ -1601,10 +2461,41 @@ async function handleApi(request, response, url) {
     const body = await readBody(request);
     await toggleAccount(String(body.name || ""), body.disabled);
     result = { status: "ok" };
-  } else if (key === "DELETE /api/accounts") {
+  } else if (key === "DELETE /api/accounts" || key === "POST /api/account/delete" || key === "POST /api/accounts/delete") {
     const body = await readBody(request);
-    await deleteAccount(String(body.name || ""));
+    await deleteAccount(String(body.name || body.email || body.id || ""));
     result = { status: "ok" };
+  } else if (key === "POST /api/accounts/proxy") {
+    const body = await readBody(request);
+    const accountKey = String(body.name || body.email || "").trim();
+    if (!accountKey) throw new Error("缺少账号标识");
+    const account = (await getAccounts(true)).find((item) => accountIdentityKeys(item).includes(accountKey.toLowerCase()))
+      || { name: accountKey, email: accountKey, id: accountKey };
+    if (!runtime.settings.accountProxies) runtime.settings.accountProxies = {};
+    if (body.clear) {
+      delete runtime.settings.accountProxies[accountKey];
+      try { await setAccountProxyUrl(account, 0); } catch {}
+      addLog("account", `已清除账号 ${accountKey} 的节点绑定`);
+    } else {
+      const port = Number(body.proxyPort) || 0;
+      if (port > 0 && !await canConnect(port)) {
+        throw new Error(`代理端口 ${port} 尚未监听，拒绝绑定账号以避免出口串线`);
+      }
+      runtime.settings.accountProxies[accountKey] = {
+        name: String(body.proxyName || "默认"),
+        port,
+        boundAt: new Date().toISOString(),
+      };
+      if (port > 0) {
+        await setAccountProxyUrl(account, port);
+      } else {
+        await setAccountProxyUrl(account, 0);
+      }
+      addLog("account", `账号 ${accountKey} 绑定节点: ${body.proxyName} (出口端口 ${port})`);
+    }
+    await saveSettings();
+    runtime.accountCache.at = 0;
+    result = { ok: true, accountProxies: runtime.settings.accountProxies };
   } else if (key === "POST /api/accounts/mode") {
     const body = await readBody(request);
     runtime.settings.autoRoundRobin = Boolean(body.autoRoundRobin);

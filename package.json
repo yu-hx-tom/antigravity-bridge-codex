@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test \"test/*.test.mjs\"",
-    "check": "node --check server.mjs && node --check core.mjs && node --check history.mjs && node --check protocol.mjs && node --check transaction.mjs && node --check public/app.js && node --check scripts/verify-codex-catalog.mjs && node --check scripts/verify-live.mjs && node --check scripts/verify-codex-tools.mjs",
+    "check": "node --check server.mjs && node --check subscription.mjs && node --check scripts/inject-xiyou-script.mjs && node --check core.mjs && node --check history.mjs && node --check protocol.mjs && node --check transaction.mjs && node --check public/app.js && node --check scripts/verify-codex-catalog.mjs && node --check scripts/verify-live.mjs && node --check scripts/verify-codex-tools.mjs",
     "build:exe": "node scripts/build-exe.mjs",
     "verify:catalog": "node scripts/verify-codex-catalog.mjs",
     "verify:live": "node scripts/verify-live.mjs",

@@ -103,6 +103,34 @@
           <button class="button accent" id="addAccount" type="button">+ 登录 Google 账号</button>
         </div>
       </div>
+      <div class="panel" style="margin-bottom: 16px; padding: 14px 18px; border-radius: 10px; background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(255, 255, 255, 0.08);">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong style="font-size: 13.5px; color: #fff;">🌐 网络与独立出口通道 (双轨模式)</strong>
+            <p style="font-size: 11.5px; color: #94a3b8; margin: 2px 0 0 0;">可选择默认跟随系统代理，或导入机场订阅 / 自定义住宅 ISP 开启多账号物理隔离。</p>
+          </div>
+          <button class="button ghost" id="toggleNetPanel" type="button" style="padding: 4px 10px; font-size: 11.5px;">⚙️ 配置通道</button>
+        </div>
+        <div id="netPanelBody" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.06);">
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 12px; color: #cbd5e1; margin-right: 16px; cursor: pointer;"><input type="radio" name="netMode" value="default"> 模式 1：跟随系统默认代理 (0配置)</label>
+            <label style="font-size: 12px; color: #60a5fa; cursor: pointer;"><input type="radio" name="netMode" value="isolated" checked> 模式 2：高级多出口独立隔离 (多账号防风控)</label>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+            <div>
+              <label style="font-size: 11px; color: #94a3b8; display: block; margin-bottom: 4px;">机场订阅链接 (Clash / Base64)</label>
+              <input type="text" id="netSubUrl" placeholder="https://... 粘贴订阅链接" style="width: 100%; padding: 6px 10px; font-size: 12px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; color: #fff;">
+            </div>
+            <div>
+              <label style="font-size: 11px; color: #94a3b8; display: block; margin-bottom: 4px;">自定义住宅静态 ISP (IP:Port:User:Pass)</label>
+              <input type="text" id="netCustomIsp" placeholder="203.0.113.10:443:user:pass" style="width: 100%; padding: 6px 10px; font-size: 12px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; color: #fff;">
+            </div>
+          </div>
+          <div style="display: flex; justify-content: flex-end;">
+            <button class="button primary" id="saveNetSettings" type="button" style="padding: 5px 14px; font-size: 11.5px;">💾 保存并同步通道</button>
+          </div>
+        </div>
+      </div>
       <div class="notice">
         <b>额度百分比与实际健康是两套信号</b>
         <span><code>fetchAvailableModels</code> 可能仍显示有额度，但生成请求已被 429 限流；账号卡会同时显示代理运行状态与上游报告值。</span>
@@ -165,6 +193,37 @@
       <div class="log-window" id="logWindow"><p><time>--:--:--</time><span>APP</span> 等待运行事件</p></div>
     </section>
   </main>
+
+  <dialog id="oauthModal" class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>➕ 登录 Google 账号（选择专属节点）</h3>
+        <button id="closeOauthModal" class="close-btn" type="button">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">为当前登录会话分配专属代理节点。网桥将通过独立隔离浏览器启动登录，并为你展示真实出口 IP 确认页。</p>
+
+        <div class="form-group" style="margin-top: 12px;">
+          <label for="proxyNodeSelect">选择代理节点 / 出口</label>
+          <select id="proxyNodeSelect" class="form-select">
+            <option value="">正在读取真实出口通道…</option>
+          </select>
+        </div>
+
+        <div class="ip-check-card" id="ipCheckCard" style="margin-top: 14px;">
+          <div class="ip-check-header">
+            <span class="health-dot" style="background: #3b82f6;"></span>
+            <strong id="selectedNodeTitle">请选择已激活的真实出口通道</strong>
+          </div>
+          <p class="ip-check-tip">💡 启动后浏览器将<b>自动打开两个标签页</b>：<br/><b>Tab 1</b> 访问 <code>ip.sb</code> 秒开验证当前真实出口 IP；<br/><b>Tab 2</b> 访问 Google OAuth 授权页。肉眼确认 IP 安全后再输入密码！</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="button ghost" id="cancelOauth" type="button">取消</button>
+        <button class="button primary" id="confirmOauth" type="button">🚀 启动安全隔离浏览器登录</button>
+      </div>
+    </div>
+  </dialog>
 
   <footer><span>ANTIGRAVITY CODEX BRIDGE</span><span>LOCAL-FIRST / PRESERVE LOGIN & HISTORY</span></footer>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

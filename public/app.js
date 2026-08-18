@@ -133,6 +133,9 @@ function renderAccounts(accounts) {
   target.innerHTML = accounts.map((account) => {
     const health = accountHealth(account);
     const initial = (account.email || account.name || "A").slice(0, 1).toUpperCase();
+    const proxyBadge = account.assignedProxy
+      ? `<span class="proxy-badge" title="该账号请求已锁定至专属节点">🔒 ${escapeHtml(account.assignedProxy.name)}</span>`
+      : `<span class="proxy-badge" style="opacity: 0.6;" title="跟随系统默认规则">🌐 默认网络</span>`;
     return `<article class="account-card">
       <div class="account-main">
         <div class="account-header-row">
@@ -140,6 +143,7 @@ function renderAccounts(accounts) {
             <span class="avatar">${escapeHtml(initial)}</span>
             <div><strong>${escapeHtml(account.email || account.name)}</strong></div>
             <div class="health-line" style="margin: 0 0 0 6px;"><span class="health-dot ${health.tone}"></span><b>${escapeHtml(health.label)}</b></div>
+            <div style="margin-left: 8px;">${proxyBadge}</div>
           </div>
           <div class="account-actions">
             <button class="button ghost" style="padding: 4px 8px; font-size: 11px;" data-account-toggle="${escapeHtml(account.name)}" data-disabled="${account.disabled}">${account.disabled ? "启用" : "停用"}</button>
@@ -256,7 +260,72 @@ $("#toggleCore").addEventListener("click", () => runBusy("core", async () => {
 
 $("#installCore").addEventListener("click", () => runBusy("install", () => api("/api/proxy/install", { method: "POST", body: "{}" }), "CLIProxyAPI 核心安装完成").catch(() => {}));
 
+async function loadProxyNodes() {
+  try {
+    const nodes = await api("/api/proxies/nodes");
+    if (Array.isArray(nodes) && nodes.length > 0) {
+      const select = $("#proxyNodeSelect");
+      if (select) {
+        select.innerHTML = nodes.map((node, idx) => {
+          const isDefault = idx === 0;
+          const label = node.display || `${node.country || "🌐"} ${node.name}`;
+          return `<option value="${node.port}" data-name="${escapeHtml(node.name)}" ${isDefault ? "selected" : ""}>${escapeHtml(label)}</option>`;
+        }).join("");
+        updateModalNodeTip();
+      }
+    }
+  } catch {}
+}
+
+function updateModalNodeTip() {
+  const select = $("#proxyNodeSelect");
+  const title = $("#selectedNodeTitle");
+  if (select && title) {
+    const opt = select.selectedOptions?.[0];
+    if (opt) {
+      title.textContent = opt.dataset.name || opt.textContent;
+    }
+  }
+}
+
+$("#proxyNodeSelect")?.addEventListener("change", updateModalNodeTip);
+
+$("#closeOauthModal")?.addEventListener("click", () => $("#oauthModal")?.close());
+$("#cancelOauth")?.addEventListener("click", () => $("#oauthModal")?.close());
+
 $("#addAccount").addEventListener("click", async () => {
+  await loadProxyNodes();
+  const modal = $("#oauthModal");
+  if (modal && typeof modal.showModal === "function") {
+    modal.showModal();
+  } else {
+    // 降级传统启动
+    startOAuthDirectly();
+  }
+});
+
+$("#confirmOauth")?.addEventListener("click", async () => {
+  const select = $("#proxyNodeSelect");
+  const opt = select?.selectedOptions?.[0];
+  const proxyPort = Number(select?.value) || 0;
+  const proxyName = opt?.dataset.name || "默认网络";
+
+  $("#oauthModal")?.close();
+  showToast(`正在调起专属安全浏览器 (节点: ${proxyName})...`);
+
+  try {
+    const result = await runBusy("oauth", () => api("/api/oauth/start", {
+      method: "POST",
+      body: JSON.stringify({ proxyPort, proxyName, launchBrowser: true }),
+    }));
+    showToast("安全隔离浏览器已调起，请确认出口 IP 后登录", false);
+    await pollOAuth(result.state);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+async function startOAuthDirectly() {
   const popup = window.open("about:blank", "antigravity-oauth");
   if (popup) popup.document.write("<p style='font-family:sans-serif;padding:24px'>正在准备 Google OAuth...</p>");
   try {
@@ -268,7 +337,7 @@ $("#addAccount").addEventListener("click", async () => {
     if (popup && !popup.closed) popup.close();
     showToast(error.message, true);
   }
-});
+}
 
 $("#refreshQuota").addEventListener("click", () => runBusy("quota", () => api("/api/quota/refresh", { method: "POST", body: "{}" }), "上游报告额度已刷新").catch(() => {}));
 
@@ -375,6 +444,54 @@ if (themeBtn) {
 }
 
 initTheme();
+
+// Network Management
+let netLoaded = false;
+async function loadNetworkSettings() {
+  if (netLoaded) return;
+  try {
+    const res = await api("/api/network/settings");
+    if (res && res.networkSettings) {
+      const ns = res.networkSettings;
+      const modeRadio = document.querySelector(`input[name="netMode"][value="${ns.mode || 'isolated'}"]`);
+      if (modeRadio) modeRadio.checked = true;
+      if ($("#netSubUrl")) $("#netSubUrl").value = ns.subscriptionUrl || "";
+      if ($("#netCustomIsp")) $("#netCustomIsp").value = ns.customIspText || "";
+      netLoaded = true;
+    }
+  } catch {}
+}
+
+const toggleNetBtn = $("#toggleNetPanel");
+if (toggleNetBtn) {
+  toggleNetBtn.addEventListener("click", () => {
+    const body = $("#netPanelBody");
+    if (body) {
+      const isVisible = body.style.display !== "none";
+      body.style.display = isVisible ? "none" : "block";
+      if (!isVisible) loadNetworkSettings();
+    }
+  });
+}
+
+const saveNetBtn = $("#saveNetSettings");
+if (saveNetBtn) {
+  saveNetBtn.addEventListener("click", async () => {
+    const selMode = document.querySelector('input[name="netMode"]:checked')?.value || "isolated";
+    const subUrl = $("#netSubUrl")?.value || "";
+    const ispText = $("#netCustomIsp")?.value || "";
+    runBusy("network", async () => {
+      const result = await api("/api/network/settings", {
+        method: "POST",
+        body: JSON.stringify({ mode: selMode, subscriptionUrl: subUrl, customIspText: ispText }),
+      });
+      showToast(result?.activation?.restartRequired
+        ? "配置已写入；请切换配置或重启西游云以加载新端口"
+        : "配置已保存，独立端口已开始监听；全链路请单独测速");
+      await refresh(true);
+    }).catch(() => {});
+  });
+}
 
 refresh(true);
 setInterval(() => refresh(false), 4000);
