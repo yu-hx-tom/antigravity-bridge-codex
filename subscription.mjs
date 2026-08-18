@@ -665,6 +665,19 @@ export function createXiyouOverrideScript(egressPlan = []) {
     config.proxies.push(proxy);
   }
 
+  // 1.5 将自定义代理注入到所有策略组中，确保西游云客户端界面也能直接看到并选择
+  if (config["proxy-groups"] && Array.isArray(config["proxy-groups"])) {
+    config["proxy-groups"].forEach(group => {
+      if (group && Array.isArray(group.proxies)) {
+        for (const proxy of customProxies) {
+          if (!group.proxies.includes(proxy.name)) {
+            group.proxies.push(proxy.name);
+          }
+        }
+      }
+    });
+  }
+
   // 2. 辅助函数：智能精准匹配目标节点名称
   function matchProxyName(targetName, targetRegion) {
     if (!targetName) return null;
