@@ -4436,9 +4436,13 @@ namespace AntigravityDesktopClient
             {
                 if (cb.IsChecked == true) selectedCount++;
             }
-            if (btnConfirmSelectedNodes != null)
+            if (btnPreparePlan != null)
             {
-                btnConfirmSelectedNodes.Content = string.Format("🚀 确认选中的节点并激活独立通道 (已选 {0} 个)", selectedCount);
+                btnPreparePlan.Content = string.Format("① 🚀 生成待应用计划 (已选 {0} 个)", selectedCount);
+            }
+            else if (btnConfirmSelectedNodes != null)
+            {
+                btnConfirmSelectedNodes.Content = string.Format("① 🚀 生成待应用计划 (已选 {0} 个)", selectedCount);
             }
         }
 
