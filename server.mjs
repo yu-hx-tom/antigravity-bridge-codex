@@ -690,6 +690,15 @@ async function getAccounts(force = false) {
         || runtime.settings.accountProxies?.[account.name]
         || null;
 
+      let proxyDisplay = "🌐 默认网络";
+      if (assignedProxy) {
+        if (assignedProxy.port && assignedProxy.name) {
+          proxyDisplay = `🌐 端口 ${assignedProxy.port} · ${assignedProxy.name}`;
+        } else if (assignedProxy.name) {
+          proxyDisplay = `🌐 ${assignedProxy.name}`;
+        }
+      }
+
       return {
         id: account.id || account.name,
         authIndex: account.auth_index || "",
@@ -707,6 +716,7 @@ async function getAccounts(force = false) {
         source: account.source || "file",
         quota: q,
         assignedProxy,
+        proxyDisplay,
       };
     });
   runtime.accountCache = { at: Date.now(), value: accounts };

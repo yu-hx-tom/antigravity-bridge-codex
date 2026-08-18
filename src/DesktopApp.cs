@@ -2921,6 +2921,48 @@ namespace AntigravityDesktopClient
                 VerticalAlignment = VerticalAlignment.Center
             };
             userLeft.Children.Add(statusTxt);
+
+            string proxyDisplay = "";
+            if (acc.ContainsKey("assignedProxy") && acc["assignedProxy"] != null)
+            {
+                var ap = acc["assignedProxy"] as Dictionary<string, object>;
+                if (ap != null)
+                {
+                    string pName = ap.ContainsKey("name") ? ap["name"].ToString() : "";
+                    string pPort = ap.ContainsKey("port") ? ap["port"].ToString() : "";
+                    if (!string.IsNullOrEmpty(pPort) && pPort != "0")
+                        proxyDisplay = string.Format("🌐 {0} · {1}", pPort, string.IsNullOrEmpty(pName) ? "专属通道" : pName);
+                    else if (!string.IsNullOrEmpty(pName))
+                        proxyDisplay = string.Format("🌐 {0}", pName);
+                }
+            }
+            if (string.IsNullOrEmpty(proxyDisplay) && acc.ContainsKey("proxyDisplay") && acc["proxyDisplay"] != null)
+            {
+                proxyDisplay = acc["proxyDisplay"].ToString();
+            }
+            if (string.IsNullOrEmpty(proxyDisplay))
+            {
+                proxyDisplay = "🌐 默认网络";
+            }
+
+            Border proxyPill = new Border
+            {
+                Background = new SolidColorBrush(isDarkMode ? System.Windows.Media.Color.FromArgb(30, 59, 130, 246) : System.Windows.Media.Color.FromArgb(20, 37, 99, 235)),
+                BorderBrush = new SolidColorBrush(isDarkMode ? System.Windows.Media.Color.FromArgb(80, 59, 130, 246) : System.Windows.Media.Color.FromArgb(60, 37, 99, 235)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            proxyPill.Child = new TextBlock
+            {
+                Text = proxyDisplay,
+                FontSize = 9.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(ColPrimaryDark)
+            };
+            userLeft.Children.Add(proxyPill);
             Grid.SetColumn(userLeft, 0);
             headerGrid.Children.Add(userLeft);
 

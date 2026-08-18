@@ -134,8 +134,8 @@ function renderAccounts(accounts) {
     const health = accountHealth(account);
     const initial = (account.email || account.name || "A").slice(0, 1).toUpperCase();
     const proxyBadge = account.assignedProxy
-      ? `<span class="proxy-badge" title="该账号请求已锁定至专属节点">🔒 ${escapeHtml(account.assignedProxy.name)}</span>`
-      : `<span class="proxy-badge" style="opacity: 0.6;" title="跟随系统默认规则">🌐 默认网络</span>`;
+      ? `<span class="proxy-badge" title="该账号请求已锁定至专属节点">🔒 ${account.assignedProxy.port ? `端口 ${escapeHtml(account.assignedProxy.port)} · ` : ""}${escapeHtml(account.assignedProxy.name)}</span>`
+      : `<span class="proxy-badge" style="opacity: 0.85;" title="跟随系统默认规则">${escapeHtml(account.proxyDisplay || "🌐 默认网络")}</span>`;
     return `<article class="account-card">
       <div class="account-main">
         <div class="account-header-row">
