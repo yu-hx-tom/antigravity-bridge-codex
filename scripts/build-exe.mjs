@@ -4,7 +4,7 @@
  * Produces:
  * 1. dist/AntigravityCodexBridge/AntigravityCodexBridge.exe (Native Windows System Tray Executable)
  * 2. dist/AntigravityCodexBridge/ (complete standalone portable folder)
- * 3. dist/启动 Antigravity Codex Bridge.bat
+ * 3. dist/启动.bat
  */
 
 import fs from "node:fs/promises";
@@ -14,15 +14,18 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DIST = path.join(ROOT, "dist");
+const isStaging = process.argv.includes("--staging");
+const DIST = path.join(ROOT, isStaging ? "dist-staging" : "dist");
 const APP_DIR = path.join(DIST, "AntigravityCodexBridge");
 
-console.log("=== Building Antigravity Codex Bridge Standalone Package ===");
+console.log(`=== Building Antigravity Codex Bridge Standalone Package (${isStaging ? "STAGING MODE" : "RELEASE MODE"}) ===`);
 
 // 1. Clean and prepare output directories
-try {
-  execSync("taskkill /F /IM AntigravityCodexBridge.exe /T 2>nul || (exit 0)", { stdio: "ignore", shell: "cmd.exe" });
-} catch {}
+if (!isStaging) {
+  try {
+    execSync("taskkill /F /IM AntigravityCodexBridge.exe /T 2>nul || (exit 0)", { stdio: "ignore", shell: "cmd.exe" });
+  } catch {}
+}
 
 try {
   await fs.rm(DIST, { recursive: true, force: true });
@@ -74,7 +77,7 @@ if (fsSync.existsSync(cscPath) && fsSync.existsSync(desktopCsPath)) {
     const iconFlag = fsSync.existsSync(icoPath) ? `/win32icon:"${icoPath}"` : "";
     const compileCmd = `"${cscPath}" /target:winexe /optimize+ /platform:anycpu ${manifestFlag} ${iconFlag} /out:"${targetExePath}" /lib:"${wpfLib}" /r:PresentationFramework.dll,PresentationCore.dll,WindowsBase.dll,System.dll,System.Drawing.dll,System.Windows.Forms.dll,System.Xaml.dll,System.Web.Extensions.dll "${desktopCsPath}"`;
     execSync(compileCmd, { stdio: "inherit" });
-    console.log(" Native Desktop GUI Client compiled successfully!");
+    console.log("✓ Native Desktop GUI Client compiled successfully!");
     await fs.copyFile(targetExePath, path.join(DIST, "AntigravityCodexBridge.exe"));
   } catch (err) {
     throw new Error(`Could not compile Desktop .EXE: ${err.message}`);
@@ -123,6 +126,6 @@ const readmeTxt = `Antigravity Codex Bridge 便携运行包
 
 await fs.writeFile(path.join(APP_DIR, "使用说明.txt"), readmeTxt, "utf8");
 
-console.log("\n Build complete!");
+console.log("\n✓ Build complete!");
 console.log(` Output location: ${APP_DIR}`);
 console.log(` Native EXE: ${targetExePath}`);

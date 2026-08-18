@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 
 /**
  * 国家国旗与地区名称识别（精准匹配地区与排除受限地区）
@@ -510,30 +511,84 @@ export function pickRecommendedNodes(nodes, maxCount = 5) {
   return [...recList, ...otherList];
 }
 
+/**
+ * 计算节点的唯一稳定身份指纹 (SHA-256 截断前 16 位)
+ */
+export function computeNodeFingerprint(node) {
+  const proto = String(node?.protocol || node?.type || "").trim().toLowerCase();
+  const name = String(node?.name || "").trim().toLowerCase();
+  const server = String(node?.server || "").trim().toLowerCase();
+  const port = Number(node?.port) || 0;
+  const raw = `${proto}:${name}:${server}:${port}`;
+  return crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+
+/**
+ * 严格寻找新加坡 IEPL/专线 跳板节点 (找不到时返回 null，绝不偷偷替换为其他国家)
+ */
 export function selectSingaporeRelay(nodes = []) {
   const candidates = nodes.filter((node) => !node.isCustomIsp && node.isSupported !== false);
-  return candidates.find((node) => /新加坡/i.test(node.name || "") && /IEPL|IPLC|专线/i.test(node.name || ""))
+  return candidates.find((node) => /新加坡|SINGAPORE|\bSG\b/i.test(node.name || "") && /IEPL|IPLC|专线/i.test(node.name || ""))
     || candidates.find((node) => /新加坡|SINGAPORE|\bSG\b/i.test(node.name || ""))
     || null;
 }
 
 /**
- * 根据用户最终勾选的节点列表构建独立端口通道表
+ * 根据选中的节点构建独立端口通道表 (支持稳定端口复用)
  */
-export function buildPlanFromSelectedNodes(selectedNodes = [], startPort = 7892, { relayNodeName = "" } = {}) {
-  let currentPort = startPort;
+export function buildPlanFromSelectedNodes(selectedNodes = [], startPort = 7892, { relayNodeName = "", previousPlan = [] } = {}) {
+  const prevPortByFp = new Map();
+  for (const prev of previousPlan) {
+    if (prev && prev.fingerprint && prev.port) {
+      prevPortByFp.set(prev.fingerprint, Number(prev.port));
+    }
+  }
+
+  const usedPorts = new Set();
   const usedProxyNames = new Map();
-  return selectedNodes.map((n) => {
-    const listenerPort = currentPort++;
+
+  // 1. 第一轮：已存在稳定指纹的节点优先复用原来的端口
+  const portAssignments = new Array(selectedNodes.length).fill(0);
+  for (let i = 0; i < selectedNodes.length; i++) {
+    const node = selectedNodes[i];
+    const fp = computeNodeFingerprint(node);
+    if (prevPortByFp.has(fp)) {
+      const p = prevPortByFp.get(fp);
+      if (!usedPorts.has(p)) {
+        portAssignments[i] = p;
+        usedPorts.add(p);
+      }
+    }
+  }
+
+  // 2. 第二轮：新节点分配下一个空闲端口
+  let candidatePort = startPort;
+  for (let i = 0; i < selectedNodes.length; i++) {
+    if (portAssignments[i] === 0) {
+      while (usedPorts.has(candidatePort)) {
+        candidatePort++;
+      }
+      portAssignments[i] = candidatePort;
+      usedPorts.add(candidatePort);
+    }
+  }
+
+  // 3. 构建完整的 Egress Channel 对象
+  return selectedNodes.map((n, idx) => {
+    const listenerPort = portAssignments[idx];
     const isCustomIsp = Boolean(n.isCustomIsp);
+    const fingerprint = computeNodeFingerprint(n);
     const baseName = String(n.name || `节点 ${listenerPort}`).trim();
     const duplicateIndex = (usedProxyNames.get(baseName) || 0) + 1;
     usedProxyNames.set(baseName, duplicateIndex);
     const uniqueName = duplicateIndex === 1 ? baseName : `${baseName} #${duplicateIndex}`;
     const proxyName = isCustomIsp ? `ABC · ${uniqueName}` : uniqueName;
     const remotePort = Number(n.port) || 0;
+
     return {
-      id: `egress-${n.id || listenerPort}`,
+      id: `egress-${n.id || fingerprint || listenerPort}`,
+      egressId: fingerprint,
+      fingerprint,
       name: uniqueName,
       proxyName,
       protocol: n.protocol || String(n.type || "HTTP").toUpperCase(),
@@ -544,7 +599,7 @@ export function buildPlanFromSelectedNodes(selectedNodes = [], startPort = 7892,
       entryPort: remotePort,
       relayNodeName: isCustomIsp ? relayNodeName : "",
       desc: isCustomIsp
-        ? `${n.region || ""}住宅落地 · 经 ${relayNodeName || "未配置"} 中转`
+        ? `${n.region || ""}住宅落地 · 经 ${relayNodeName || "未配置跳板"} 中转`
         : `${n.region || ""}${n.tags && n.tags.length ? ` (${n.tags.join("/")})` : "专线出口"}`,
       display: `[${n.protocol || "HTTP"}] ${n.country || "🌐"} ${uniqueName} [端口 ${listenerPort}]`,
       isCustomIsp,
@@ -558,7 +613,7 @@ export function buildPlanFromSelectedNodes(selectedNodes = [], startPort = 7892,
         password: String(n.password || ""),
         udp: Boolean(n.udp),
         "skip-cert-verify": Boolean(n["skip-cert-verify"]),
-        "dialer-proxy": relayNodeName,
+        "dialer-proxy": relayNodeName || undefined,
       } : null,
     };
   });
@@ -567,12 +622,17 @@ export function buildPlanFromSelectedNodes(selectedNodes = [], startPort = 7892,
 export function findActivatedEgress(node, egressPlan = []) {
   const nodeId = String(node?.id || "");
   const nodeName = String(node?.name || "");
+  const fp = node ? computeNodeFingerprint(node) : "";
   return egressPlan.find((item) => Number(item?.port) > 0 && (
-    (nodeId && (item.id === nodeId || item.id === `egress-${nodeId}`))
+    (fp && (item.fingerprint === fp || item.egressId === fp))
+    || (nodeId && (item.id === nodeId || item.id === `egress-${nodeId}`))
     || (nodeName && (item.name === nodeName || item.proxyName === nodeName))
   )) || null;
 }
 
+/**
+ * 严格按照西游云 (FlClash) 现有格式生成覆写脚本
+ */
 export function createXiyouOverrideScript(egressPlan = []) {
   const customProxies = egressPlan.map((item) => item.sourceProxy).filter(Boolean);
   const listeners = egressPlan.map((item) => ({
@@ -593,18 +653,19 @@ export function createXiyouOverrideScript(egressPlan = []) {
   const desiredListeners = ${JSON.stringify(listeners)};
   const managedProxyNames = new Set(customProxies.map(proxy => proxy.name));
 
-  // 1. 注入自定义代理 (如带新加坡专线链式中转的静态 ISP)
+  // 1. 注入自定义代理 (如带严格新加坡专线链式中转的静态 ISP)
   config.proxies = config.proxies.filter(proxy => !proxy || !managedProxyNames.has(proxy.name));
   const baseProxyNames = new Set(config.proxies.map(proxy => proxy && proxy.name).filter(Boolean));
   for (const proxy of customProxies) {
     if (proxy["dialer-proxy"] && !baseProxyNames.has(proxy["dialer-proxy"])) {
+      // 严格检查：必须能匹配到明确的新加坡跳板节点
       const matchedSg = config.proxies.find(p => p && p.name && (p.name.includes("新加坡") || p.name.includes("IEPL")));
       if (matchedSg) proxy["dialer-proxy"] = matchedSg.name;
     }
     config.proxies.push(proxy);
   }
 
-  // 2. 辅助函数：智能匹配目标节点名称
+  // 2. 辅助函数：智能精准匹配目标节点名称
   function matchProxyName(targetName, targetRegion) {
     if (!targetName) return null;
     const exact = config.proxies.find(p => p && p.name === targetName);
@@ -656,9 +717,68 @@ export function createXiyouOverrideScript(egressPlan = []) {
 }
 
 /**
+ * 纯函数：检查西游云配置中的脚本状态
+ */
+export function inspectXiyouPreferences(rawText) {
+  try {
+    const rawObj = JSON.parse(rawText || "{}");
+    const flutterConfig = JSON.parse(rawObj["flutter.config"] || "{}");
+    const scriptProps = flutterConfig.scriptProps || {};
+    const scripts = Array.isArray(scriptProps.scripts) ? scriptProps.scripts : [];
+    const currentId = scriptProps.currentId || null;
+    const activeScript = scripts.find((s) => s.id === currentId || s.id === "abc-multi-proxy-script") || null;
+    const content = activeScript?.content || activeScript?.code || "";
+    const scriptHash = content ? crypto.createHash("sha256").update(content).digest("hex") : "";
+
+    return {
+      ok: true,
+      currentId,
+      scriptCount: scripts.length,
+      hasAbcScript: Boolean(activeScript),
+      isActive: currentId === "abc-multi-proxy-script",
+      scriptHash,
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * 纯函数：将标准格式的脚本补丁写入西游云 JSON 文本中
+ */
+export function patchXiyouPreferences(rawText, scriptCode) {
+  const rawObj = JSON.parse(rawText || "{}");
+  const flutterConfig = JSON.parse(rawObj["flutter.config"] || "{}");
+
+  const scriptId = "abc-multi-proxy-script";
+  const scriptItem = {
+    id: scriptId,
+    label: "Antigravity多端口并发代理脚本",
+    content: scriptCode,
+    url: null,
+  };
+
+  if (!flutterConfig.scriptProps) {
+    flutterConfig.scriptProps = { currentId: scriptId, scripts: [scriptItem] };
+  } else {
+    flutterConfig.scriptProps.currentId = scriptId;
+    if (!Array.isArray(flutterConfig.scriptProps.scripts)) flutterConfig.scriptProps.scripts = [];
+    const existingIdx = flutterConfig.scriptProps.scripts.findIndex((s) => s.id === scriptId || s.label === scriptItem.label);
+    if (existingIdx >= 0) {
+      flutterConfig.scriptProps.scripts[existingIdx] = scriptItem;
+    } else {
+      flutterConfig.scriptProps.scripts.push(scriptItem);
+    }
+  }
+
+  rawObj["flutter.config"] = JSON.stringify(flutterConfig);
+  return JSON.stringify(rawObj);
+}
+
+/**
  * 组装多端口分配表 (自动分配 7892, 7893, 7894, 7895...)
  */
-export function buildMultiPortEgressPlan({ customIsp = null, customNodes = [], parsedNodes = [], startPort = 7892 } = {}) {
+export function buildMultiPortEgressPlan({ customIsp = null, customNodes = [], parsedNodes = [], startPort = 7892, previousPlan = [] } = {}) {
   const allCandidates = [];
   const customList = parseCustomNodesList(customNodes || customIsp);
   for (const cNode of customList) {
@@ -668,5 +788,5 @@ export function buildMultiPortEgressPlan({ customIsp = null, customNodes = [], p
 
   const recommendedNodes = pickRecommendedNodes(allCandidates, 5).filter((n) => n.recommended);
   const relay = selectSingaporeRelay(recommendedNodes);
-  return buildPlanFromSelectedNodes(recommendedNodes, startPort, { relayNodeName: relay?.name || "" });
+  return buildPlanFromSelectedNodes(recommendedNodes, startPort, { relayNodeName: relay?.name || "", previousPlan });
 }

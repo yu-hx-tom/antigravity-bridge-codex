@@ -1,6 +1,7 @@
 .data/
 node_modules/
 dist/
+dist-staging/
 project/
 *.log
 *.tmp

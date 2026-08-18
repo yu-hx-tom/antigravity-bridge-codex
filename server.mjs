@@ -48,6 +48,9 @@ import {
   selectSingaporeRelay,
   findActivatedEgress,
   createXiyouOverrideScript,
+  computeNodeFingerprint,
+  patchXiyouPreferences,
+  inspectXiyouPreferences,
 } from "./subscription.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -134,6 +137,17 @@ function defaultSettings() {
       customNodes: [],
       selectedNodes: [],
       egressPlan: [],
+      pendingEgressPlan: [],
+      activation: {
+        state: "inactive",
+        generationId: "",
+        scriptHash: "",
+        expectedPorts: [],
+        preparedAt: null,
+        writtenAt: null,
+        verifiedAt: null,
+        failure: "",
+      },
       lastSyncedAt: null,
     },
     codexActiveBackup: "",
@@ -1374,13 +1388,85 @@ async function fetchSubscriptionCandidateNodes(forceUrl = null, forceCustomIsp =
   };
 }
 
-async function applySelectedNodes(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
+export async function isXiyouProcessesRunning() {
+  if (process.platform !== "win32") return false;
+  try {
+    const { stdout } = await execFileAsync("tasklist.exe", ["/NH", "/FO", "CSV"], {
+      encoding: "utf8",
+      timeout: 5000,
+      windowsHide: true,
+    });
+    const lower = stdout.toLowerCase();
+    return lower.includes("xiyouyun.exe") || lower.includes("xiyoucore.exe");
+  } catch {
+    return false;
+  }
+}
+
+export async function isXiyouCoreRunning() {
+  if (process.platform !== "win32") return true;
+  try {
+    const { stdout } = await execFileAsync("tasklist.exe", ["/NH", "/FO", "CSV"], {
+      encoding: "utf8",
+      timeout: 5000,
+      windowsHide: true,
+    });
+    return stdout.toLowerCase().includes("xiyoucore.exe");
+  } catch {
+    return false;
+  }
+}
+
+export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    let isResolved = false;
+    const done = (val) => {
+      if (!isResolved) {
+        isResolved = true;
+        resolve(val);
+      }
+    };
+    setTimeout(() => done({ ok: false, error: "timeout" }), timeoutMs);
+
+    const req = http.get({
+      host: "127.0.0.1",
+      port: proxyPort,
+      path: "http://ip-api.com/json",
+      headers: { Host: "ip-api.com", "User-Agent": "curl/7.88.1" },
+    }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.status === "success" || json.countryCode) {
+            done({
+              ok: true,
+              ip: json.query || json.ip || "",
+              countryCode: String(json.countryCode || "").toUpperCase(),
+              country: json.country || "",
+              region: json.regionName || json.region || "",
+              isp: json.isp || "",
+            });
+            return;
+          }
+        } catch {}
+        done({ ok: false, error: "invalid response" });
+      });
+    });
+    req.on("error", (e) => done({ ok: false, error: e.message }));
+  });
+}
+
+/**
+ * 阶段 1：生成待应用计划与覆写脚本，计算 SHA-256 (不碰西游云文件，不改生效 plan)
+ */
+export async function prepareSelectedNodes(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
   const netSettings = { ...(runtime.settings.networkSettings || {}) };
   if (forceUrl !== null) netSettings.subscriptionUrl = String(forceUrl).trim();
   if (forceCustomIsp !== null) netSettings.customIspText = String(forceCustomIsp).trim();
   if (forceCustomNodes !== null) netSettings.customNodes = forceCustomNodes;
   netSettings.mode = "isolated";
-  netSettings.lastSyncedAt = new Date().toISOString();
 
   let nodesToApply = selectedNodes;
   if (!nodesToApply || nodesToApply.length === 0) {
@@ -1405,94 +1491,241 @@ async function applySelectedNodes(selectedNodes = [], forceUrl = null, forceCust
     throw new Error("住宅 ISP 必须经过新加坡专线，但当前节点列表中没有找到新加坡 IEPL/IPLC/专线节点");
   }
 
-  const egressPlan = buildPlanFromSelectedNodes(nodesToApply, 7892, { relayNodeName: relay?.name || "" });
-  // 先成功备份并写入西游云，再提交 Bridge 的激活状态，避免注入失败后留下假计划。
-  const injection = await injectXiyouyunRelayScript(egressPlan);
-  runtime.egressPlan = egressPlan;
+  // 使用稳定端口分配：优先复用已存在的端口，保证勾选顺序改变时端口不飘移
+  const previousPlan = netSettings.egressPlan || runtime.egressPlan || [];
+  const pendingEgressPlan = buildPlanFromSelectedNodes(nodesToApply, 7892, {
+    relayNodeName: relay?.name || "",
+    previousPlan,
+  });
+
+  const scriptCode = createXiyouOverrideScript(pendingEgressPlan);
+  const scriptHash = crypto.createHash("sha256").update(scriptCode).digest("hex");
+  const expectedPorts = pendingEgressPlan.map((p) => Number(p.port));
+
+  const xiyouRunning = await isXiyouProcessesRunning();
+
+  netSettings.pendingEgressPlan = pendingEgressPlan;
   netSettings.selectedNodes = nodesToApply;
-  netSettings.egressPlan = egressPlan;
   netSettings.relayNodeName = relay?.name || "";
+  netSettings.activation = {
+    state: "prepared",
+    generationId: randomKey("gen"),
+    scriptHash,
+    expectedPorts,
+    preparedAt: new Date().toISOString(),
+    writtenAt: null,
+    verifiedAt: null,
+    failure: "",
+  };
+
   runtime.settings.networkSettings = netSettings;
   await saveSettings();
 
-  const ports = await Promise.all(egressPlan.map(async (item) => ({ port: item.port, ready: await canConnect(item.port) })));
-  const readyPorts = ports.filter((item) => item.ready).map((item) => item.port);
-  const pendingPorts = ports.filter((item) => !item.ready).map((item) => item.port);
+  addLog("network", `已生成 ${pendingEgressPlan.length} 个端口计划 (Hash: ${scriptHash.slice(0, 8)})，等待安全写入`);
 
-  addLog("network", pendingPorts.length > 0
-    ? `已写入 ${egressPlan.length} 个独立通道；等待西游云重新加载配置的端口: ${pendingPorts.join(", ")}`
-    : `已写入配置，${egressPlan.length} 个独立端口正在监听`);
   return {
     ok: true,
-    egressPlan: publicEgressPlan(egressPlan),
-    networkSettings: publicNetworkSettings(netSettings),
-    activation: {
-      readyPorts,
-      pendingPorts,
-      restartRequired: pendingPorts.length > 0,
-      preferencesPath: injection.preferencesPath,
-      backupPath: injection.backupPath,
-    },
+    state: "prepared",
+    xiyouRunning,
+    expectedPorts,
+    pendingEgressPlan: publicEgressPlan(pendingEgressPlan),
+    scriptHash,
+    message: xiyouRunning ? "计划已生成。检测到西游云正在运行，请手动退出西游云后执行安全写入。" : "计划已生成，西游云已关闭，可以执行安全写入。",
   };
 }
 
-export async function injectXiyouyunRelayScript(egressPlan = []) {
-  try {
-    const prefsPath = path.join(getClashConfigDir(), "shared_preferences.json");
-    if (!fsSync.existsSync(prefsPath)) throw new Error(`未找到西游云配置文件: ${prefsPath}`);
+/**
+ * 阶段 2：确认西游云已退出后，将标准脚本安全写入 shared_preferences.json
+ */
+export async function commitPendingXiyouScript() {
+  const netSettings = runtime.settings.networkSettings || {};
+  const activation = netSettings.activation || {};
+  const pendingPlan = netSettings.pendingEgressPlan || [];
 
+  if (!pendingPlan.length || !activation.scriptHash) {
+    throw new Error("没有待提交的计划，请先生成配置计划");
+  }
+
+  // 严防内存覆盖：西游云仍在运行时拒绝写入
+  const isRunning = await isXiyouProcessesRunning();
+  if (isRunning) {
+    throw new Error("西游云仍在运行中！为防止配置文件被西游云内存状态覆写，请先彻底退出西游云客户端后再执行安全写入。");
+  }
+
+  const prefsPath = path.join(getClashConfigDir(), "shared_preferences.json");
+  if (!fsSync.existsSync(prefsPath)) throw new Error(`未找到西游云配置文件: ${prefsPath}`);
+
+  const rawText = await fs.readFile(prefsPath, "utf8");
+  const scriptCode = createXiyouOverrideScript(pendingPlan);
+  const patchedText = patchXiyouPreferences(rawText, scriptCode);
+
+  const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  const backupPath = path.join(path.dirname(prefsPath), `shared_preferences_backup_abc_${stamp}.json`);
+  await fs.copyFile(prefsPath, backupPath);
+  await atomicWrite(prefsPath, patchedText);
+
+  // 立即回读校验写入完整性
+  const verifyRaw = await fs.readFile(prefsPath, "utf8");
+  const inspect = inspectXiyouPreferences(verifyRaw);
+  if (!inspect.ok || inspect.currentId !== "abc-multi-proxy-script") {
+    throw new Error("写入后校验失败：当前激活脚本 ID 不符");
+  }
+  if (inspect.scriptHash !== activation.scriptHash) {
+    throw new Error("写入后校验失败：脚本内容 Hash 不一致");
+  }
+
+  activation.state = "waiting_restart";
+  activation.writtenAt = new Date().toISOString();
+  activation.failure = "";
+  netSettings.activation = activation;
+  runtime.settings.networkSettings = netSettings;
+  await saveSettings();
+
+  addLog("network", `配置已安全写入西游云 (备份: ${path.basename(backupPath)})，请手动启动西游云`);
+
+  return {
+    ok: true,
+    state: "waiting_restart",
+    preferencesPath: prefsPath,
+    backupPath,
+    message: "配置已安全写入西游云！现在请手动启动西游云，启动后点击“验证并激活出口”。",
+  };
+}
+
+/**
+ * 阶段 3：西游云手动启动后，全面验证 XiyouCore、Hash、端口监听与真实出口国家代码
+ */
+export async function verifyPendingActivation() {
+  const netSettings = runtime.settings.networkSettings || {};
+  const activation = netSettings.activation || {};
+  const pendingPlan = netSettings.pendingEgressPlan || [];
+
+  if (!pendingPlan.length || !activation.scriptHash) {
+    throw new Error("没有待验证的计划，请先生成计划");
+  }
+
+  // 1. 检查西游云核心进程
+  const coreRunning = await isXiyouCoreRunning();
+  if (!coreRunning) {
+    throw new Error("西游云核心进程 (XiyouCore) 尚未运行，请确认您已打开西游云");
+  }
+
+  // 2. 校验文件当前生效的脚本 Hash
+  const prefsPath = path.join(getClashConfigDir(), "shared_preferences.json");
+  if (fsSync.existsSync(prefsPath)) {
     const rawText = await fs.readFile(prefsPath, "utf8");
-    const rawObj = JSON.parse(rawText);
-    const flutterConfig = JSON.parse(rawObj["flutter.config"] || "{}");
-    const scriptCode = createXiyouOverrideScript(egressPlan);
+    const inspect = inspectXiyouPreferences(rawText);
+    if (!inspect.isActive || inspect.scriptHash !== activation.scriptHash) {
+      activation.state = "failed";
+      activation.failure = "西游云当前配置被其他脚本覆盖或 ID 不符";
+      await saveSettings();
+      throw new Error(`配置验证失败：${activation.failure}`);
+    }
+  }
 
-    const scriptId = "abc-multi-proxy-script";
-    const scriptItem = {
-      id: scriptId,
-      label: "Antigravity多端口并发代理脚本",
-      type: "javascript",
-      code: scriptCode,
-      content: scriptCode,
-      url: null,
-    };
+  // 3. 校验所有预计端口是否已开始监听
+  const portsStatus = await Promise.all(
+    pendingPlan.map(async (item) => ({
+      port: item.port,
+      name: item.name,
+      country: item.country,
+      region: item.region,
+      isCustomIsp: item.isCustomIsp,
+      alive: await canConnect(item.port),
+    }))
+  );
 
-    if (!flutterConfig.scriptProps) {
-      flutterConfig.scriptProps = { currentId: scriptId, scripts: [scriptItem] };
-    } else {
-      flutterConfig.scriptProps.currentId = scriptId;
-      if (!flutterConfig.scriptProps.scripts) flutterConfig.scriptProps.scripts = [];
-      const existingIdx = flutterConfig.scriptProps.scripts.findIndex(s => s.id === scriptId || s.label === scriptItem.label);
-      if (existingIdx >= 0) {
-        flutterConfig.scriptProps.scripts[existingIdx] = scriptItem;
-      } else {
-        flutterConfig.scriptProps.scripts.push(scriptItem);
+  const deadPorts = portsStatus.filter((p) => !p.alive);
+  if (deadPorts.length > 0) {
+    activation.state = "failed";
+    activation.failure = `端口 ${deadPorts.map((p) => p.port).join(", ")} 未正常监听`;
+    await saveSettings();
+    throw new Error(`端口验证失败：${activation.failure}。请检查西游云是否已正确加载脚本。`);
+  }
+
+  // 4. 端到端出口国家/地区真实核对 (台湾->TW, 新加坡->SG, 美国->US, 日本->JP)
+  const regionExpectedCode = {
+    "台湾": "TW",
+    "新加坡": "SG",
+    "美国": "US",
+    "日本": "JP",
+    "韩国": "KR",
+    "英国": "GB",
+  };
+
+  const geoResults = {};
+  for (const item of pendingPlan) {
+    const geo = await probeProxyEgressGeo(item.port);
+    geoResults[item.port] = geo;
+
+    if (!item.isCustomIsp && item.region && regionExpectedCode[item.region]) {
+      const expCode = regionExpectedCode[item.region];
+      if (geo.ok && geo.countryCode && geo.countryCode !== expCode) {
+        activation.state = "failed";
+        activation.failure = `端口 ${item.port} (${item.name}) 预期出口地区为 [${expCode}]，实测出口却为 [${geo.countryCode} · ${geo.country}]！已被硬核拦截防止串线。`;
+        await saveSettings();
+        throw new Error(activation.failure);
       }
     }
-
-    rawObj["flutter.config"] = JSON.stringify(flutterConfig);
-    const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-    const backupPath = path.join(path.dirname(prefsPath), `shared_preferences_backup_abc_${stamp}.json`);
-    await fs.copyFile(prefsPath, backupPath);
-    await atomicWrite(prefsPath, JSON.stringify(rawObj));
-    addLog("network", `已成功将多端口独立通道与新加坡专线链式挂载脚本写入西游云！`);
-    return { ok: true, preferencesPath: prefsPath, backupPath };
-  } catch (e) {
-    addLog("network", `写入西游云脚本失败: ${e.message}`, "warn");
-    throw e;
   }
+
+  // 5. 全部严格通过，转正计划！
+  runtime.egressPlan = pendingPlan;
+  netSettings.egressPlan = pendingPlan;
+  netSettings.pendingEgressPlan = [];
+  netSettings.lastSyncedAt = new Date().toISOString();
+  activation.state = "active";
+  activation.verifiedAt = new Date().toISOString();
+  activation.failure = "";
+  netSettings.activation = activation;
+  runtime.settings.networkSettings = netSettings;
+  await saveSettings();
+
+  addLog("network", `✓ 成功验证 ${pendingPlan.length} 个端口全链路真实出口，多通道已完全解锁`);
+
+  return {
+    ok: true,
+    state: "active",
+    egressPlan: publicEgressPlan(runtime.egressPlan),
+    activation,
+    geoResults,
+    message: "✓ 所有独立端口与真实出口国家已 100% 校验通过，OAuth 与多账号通道已解锁！",
+  };
+}
+
+export async function applySelectedNodes(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
+  return prepareSelectedNodes(selectedNodes, forceUrl, forceCustomIsp, forceCustomNodes);
+}
+
+export async function injectXiyouyunRelayScript(egressPlan = []) {
+  const prefsPath = path.join(getClashConfigDir(), "shared_preferences.json");
+  if (!fsSync.existsSync(prefsPath)) throw new Error(`未找到西游云配置文件: ${prefsPath}`);
+
+  const rawText = await fs.readFile(prefsPath, "utf8");
+  const scriptCode = createXiyouOverrideScript(egressPlan);
+  const patched = patchXiyouPreferences(rawText, scriptCode);
+
+  const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  const backupPath = path.join(path.dirname(prefsPath), `shared_preferences_backup_abc_${stamp}.json`);
+  await fs.copyFile(prefsPath, backupPath);
+  await atomicWrite(prefsPath, patched);
+  return { ok: true, preferencesPath: prefsPath, backupPath };
 }
 
 async function syncSubscriptionNodes(forceUrl = null, forceCustomIsp = null) {
   const fetched = await fetchSubscriptionCandidateNodes(forceUrl, forceCustomIsp);
   const recommended = fetched.nodes.filter((n) => n.recommended);
-  return applySelectedNodes(recommended, forceUrl, forceCustomIsp);
+  return prepareSelectedNodes(recommended, forceUrl, forceCustomIsp);
 }
 
+/**
+ * 纯读接口：绝不隐式修改或写入西游云配置
+ */
 async function getAvailableProxyNodes() {
   const activePort = await detectActiveProxyPort();
   const netSettings = runtime.settings.networkSettings || { mode: "isolated" };
 
-  // 模式 1：默认网络模式 (0配置，直接跟随系统/西游云主界面)
+  // 模式 1：默认网络模式
   if (netSettings.mode === "default") {
     return [
       {
@@ -1507,16 +1740,12 @@ async function getAvailableProxyNodes() {
     ];
   }
 
-  // 模式 2：高级多出口隔离模式
-  if (!runtime.egressPlan || runtime.egressPlan.length === 0) {
-    try {
-      await syncSubscriptionNodes();
-    } catch (error) {
-      addLog("network", `未能恢复独立通道: ${error.message}`, "warn");
-    }
-  }
+  // 模式 2：高级多出口隔离模式（仅返回已完成 verify 的 active 计划）
+  const isActive = netSettings.activation?.state === "active";
+  const result = (isActive && runtime.egressPlan && runtime.egressPlan.length > 0)
+    ? publicEgressPlan(runtime.egressPlan)
+    : [];
 
-  const result = publicEgressPlan(runtime.egressPlan || []);
   result.push({
     id: "default",
     name: "默认网络 / 规则分流",
@@ -1554,11 +1783,20 @@ async function launchSafeBrowser({ authUrl, proxyPort, nodeName }) {
   const requestedPort = Number(proxyPort) || 0;
   let effectivePort = requestedPort;
 
-  // 显式账号端口绝不回退到其他出口，否则 OAuth 登录 IP 与后续 API IP 会串线。
+  // 显式账号端口绝不回退到其他出口，且必须处于已验证 active 状态
   if (requestedPort > 0) {
+    const netSettings = runtime.settings.networkSettings || {};
+    const activation = netSettings.activation || {};
+    if (activation.state !== "active") {
+      throw new Error("多出口代理通道尚未完成出口验证 (状态非 active)，禁止启动 OAuth 登录以避免从错误地区登录");
+    }
+    const matchedEgress = (runtime.egressPlan || []).find((e) => Number(e.port) === requestedPort);
+    if (!matchedEgress) {
+      throw new Error(`请求的代理端口 ${requestedPort} 不存在于已激活的独立通道列表中`);
+    }
     const isTargetAlive = await canConnect(requestedPort);
     if (!isTargetAlive) {
-      throw new Error(`专属代理端口 ${requestedPort} 尚未监听；请先让西游云重新加载 Antigravity 覆写脚本`);
+      throw new Error(`专属代理端口 ${requestedPort} 尚未监听；请检查西游云`);
     }
   } else {
     effectivePort = await detectActiveProxyPort();
@@ -2449,9 +2687,13 @@ async function handleApi(request, response, url) {
   } else if (key === "POST /api/network/fetch-nodes") {
     const body = await readBody(request).catch(() => ({}));
     result = await fetchSubscriptionCandidateNodes(body.subscriptionUrl || null, body.customIspText || null, body.accountCreds || null, body.customNodes || null);
-  } else if (key === "POST /api/network/apply-nodes") {
+  } else if (key === "POST /api/network/prepare-plan" || key === "POST /api/network/apply-nodes") {
     const body = await readBody(request).catch(() => ({}));
-    result = await applySelectedNodes(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
+    result = await prepareSelectedNodes(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
+  } else if (key === "POST /api/network/commit-pending") {
+    result = await commitPendingXiyouScript();
+  } else if (key === "POST /api/network/verify-activation") {
+    result = await verifyPendingActivation();
   } else if (key === "POST /api/network/ping") {
     const body = await readBody(request).catch(() => ({}));
     result = await pingNodesList(body.nodes || []);
@@ -2490,20 +2732,32 @@ async function handleApi(request, response, url) {
       addLog("account", `已清除账号 ${accountKey} 的节点绑定`);
     } else {
       const port = Number(body.proxyPort) || 0;
-      if (port > 0 && !await canConnect(port)) {
-        throw new Error(`代理端口 ${port} 尚未监听，拒绝绑定账号以避免出口串线`);
-      }
-      runtime.settings.accountProxies[accountKey] = {
-        name: String(body.proxyName || "默认"),
-        port,
-        boundAt: new Date().toISOString(),
-      };
       if (port > 0) {
+        const netSettings = runtime.settings.networkSettings || {};
+        const activation = netSettings.activation || {};
+        if (activation.state !== "active") {
+          throw new Error("通道尚未完成出口验证 (状态非 active)，拒绝绑定账号以避免串线");
+        }
+        const matchedEgress = (runtime.egressPlan || []).find((e) => Number(e.port) === port);
+        if (!matchedEgress) {
+          throw new Error(`代理端口 ${port} 不存在于已激活的独立通道列表中`);
+        }
+        if (!await canConnect(port)) {
+          throw new Error(`代理端口 ${port} 尚未监听，拒绝绑定账号以避免出口串线`);
+        }
+        runtime.settings.accountProxies[accountKey] = {
+          egressId: matchedEgress.egressId || matchedEgress.fingerprint || "",
+          name: String(body.proxyName || matchedEgress.name || "默认"),
+          port,
+          boundAt: new Date().toISOString(),
+        };
         await setAccountProxyUrl(account, port);
+        addLog("account", `账号 ${accountKey} 绑定节点: ${body.proxyName} (出口端口 ${port})`);
       } else {
+        delete runtime.settings.accountProxies[accountKey];
         await setAccountProxyUrl(account, 0);
+        addLog("account", `已清除账号 ${accountKey} 的节点绑定`);
       }
-      addLog("account", `账号 ${accountKey} 绑定节点: ${body.proxyName} (出口端口 ${port})`);
     }
     await saveSettings();
     runtime.accountCache.at = 0;

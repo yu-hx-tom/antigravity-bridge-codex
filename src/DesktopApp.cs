@@ -499,7 +499,7 @@ namespace AntigravityDesktopClient
 
         public void UpdateModelsMenu(List<KeyValuePair<string, string>> models, string currentModel)
         {
-            Dispatcher.Invoke(new Action(() =>
+            Dispatcher.Invoke((Action)delegate
             {
                 if (miModelsSubmenu == null) return;
                 miModelsSubmenu.Items.Clear();
@@ -525,7 +525,7 @@ namespace AntigravityDesktopClient
                     };
                     miModelsSubmenu.Items.Add(item);
                 }
-            }));
+            });
         }
 
         private Geometry CreateArcGeometry(double centerX, double centerY, double radius, double startAngle, double endAngle)
@@ -550,7 +550,7 @@ namespace AntigravityDesktopClient
         public void ApplyTheme(bool isDark)
         {
             this.isDarkTheme = isDark;
-            Dispatcher.Invoke(new Action(() =>
+            Dispatcher.Invoke((Action)delegate
             {
                 if (pillBorder != null)
                 {
@@ -606,7 +606,7 @@ namespace AntigravityDesktopClient
                 }
 
                 UpdateData(lastTps, lastTtft, lastQuota5h);
-            }));
+            });
         }
 
         public void CheckDocking()
@@ -687,7 +687,7 @@ namespace AntigravityDesktopClient
             lastTtft = ttft;
             lastQuota5h = quota5h;
 
-            Dispatcher.Invoke(new Action(() =>
+            Dispatcher.Invoke((Action)delegate
             {
                 if (tps > 0)
                 {
@@ -731,7 +731,7 @@ namespace AntigravityDesktopClient
                     txtQuotaPercent.Text = "--%";
                     txtQuotaPercent.FontSize = 8.2;
                 }
-            }));
+            });
         }
     }
 
@@ -807,6 +807,12 @@ namespace AntigravityDesktopClient
         private Dictionary<string, string> nodeLatencyLabels = new Dictionary<string, string>();
         private Dictionary<string, string> egressLatencyLabels = new Dictionary<string, string>();
         private ArrayList currentEgressPlanList = new ArrayList();
+        private ArrayList currentActiveEgressPlanList = new ArrayList();
+        private ArrayList currentPendingEgressPlanList = new ArrayList();
+        private string currentActivationState = "inactive";
+        private Button btnPreparePlan;
+        private Button btnCommitPending;
+        private Button btnVerifyActivation;
 
         // Settings Modal Controls & State
         private Border settingsOverlay;
@@ -1708,7 +1714,7 @@ namespace AntigravityDesktopClient
 
         private void ShowToast(string message)
         {
-            Dispatcher.Invoke(() =>
+            Dispatcher.Invoke((Action)delegate
             {
                 txtToastMessage.Text = message;
                 toastContainer.Visibility = Visibility.Visible;
@@ -2043,7 +2049,7 @@ namespace AntigravityDesktopClient
                     string releaseUrl = data.ContainsKey("releaseUrl") ? data["releaseUrl"].ToString() : "https://github.com/yu-hx-tom/antigravity-bridge-codex/releases";
                     string releaseNotes = data.ContainsKey("releaseNotes") ? data["releaseNotes"].ToString() : "";
 
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         if (hasUpdate)
                         {
@@ -2071,7 +2077,7 @@ namespace AntigravityDesktopClient
                 {
                     if (!silentIfLatest)
                     {
-                        Dispatcher.Invoke(() => ShowToast("检查更新失败: " + ex.Message));
+                        Dispatcher.Invoke((Action)delegate { ShowToast("检查更新失败: " + ex.Message); });
                     }
                 }
             });
@@ -2438,11 +2444,11 @@ namespace AntigravityDesktopClient
                 {
                     string json = SendApiGet("api/dashboard");
                     var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
-                    Dispatcher.Invoke(() => UpdateUiFromData(data));
+                    Dispatcher.Invoke((Action)delegate { UpdateUiFromData(data); });
                 }
                 catch
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         dotTopStatus.Fill = new SolidColorBrush(ColRed);
                         txtTopStatus.Text = "等待本地服务连接...";
@@ -2687,7 +2693,7 @@ namespace AntigravityDesktopClient
                 try
                 {
                     SendApiPost("api/accounts/mode", "{\"autoRoundRobin\":" + (nextMode ? "true" : "false") + "}");
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         btnToggleRoundRobin.IsEnabled = true;
                         FetchDashboardData();
@@ -2696,7 +2702,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         btnToggleRoundRobin.IsEnabled = true;
                         MessageBox.Show("切换调度模式失败: " + ex.Message, "AntigravityCodexBridge");
@@ -2712,7 +2718,7 @@ namespace AntigravityDesktopClient
                 try
                 {
                     SendApiPost("api/accounts/select", "{\"accountId\":\"" + accountId + "\"}");
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         FetchDashboardData();
                         ShowToast("✓ 账号已切换为: " + email);
@@ -2720,7 +2726,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() => MessageBox.Show("切换指定生效账号失败: " + ex.Message, "AntigravityCodexBridge"));
+                    Dispatcher.Invoke((Action)delegate { MessageBox.Show("切换指定生效账号失败: " + ex.Message, "AntigravityCodexBridge"); });
                 }
             });
         }
@@ -2740,7 +2746,7 @@ namespace AntigravityDesktopClient
                 try
                 {
                     SendApiPost("api/account/delete", "{\"name\":\"" + name + "\"}");
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         ShowToast("✓ 账号已从本地成功移除: " + email);
                         FetchDashboardData();
@@ -2748,7 +2754,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         ShowToast("⚠️ 移除账号失败: " + ex.Message);
                     });
@@ -3421,7 +3427,7 @@ namespace AntigravityDesktopClient
                     if (string.IsNullOrEmpty(selModel)) selModel = "gemini-3.7-flash-high";
 
                     SendApiPost("api/codex/launch", "{\"model\":\"" + selModel + "\"}");
-                    Dispatcher.Invoke(new Action(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         txtCodexStatus.Text = "Codex 桌面端已启动！关闭 Codex 窗口后将自动无感恢复官方配置。";
                         btnLaunchCodex.IsEnabled = true;
@@ -3436,15 +3442,15 @@ namespace AntigravityDesktopClient
                                 MarkTrayTipShownPersisted();
                             }
                         }
-                    }));
+                    });
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(new Action(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         txtCodexStatus.Text = "启动失败: " + ex.Message;
                         btnLaunchCodex.IsEnabled = true;
-                    }));
+                    });
                 }
             });
         }
@@ -3458,7 +3464,7 @@ namespace AntigravityDesktopClient
                 try
                 {
                     SendApiPost("api/codex/restore", "{}");
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         txtCodexStatus.Text = "已成功确认并恢复官方 OpenAI 默认配置与纯净历史记录。";
                         btnRestore.IsEnabled = true;
@@ -3467,7 +3473,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         txtCodexStatus.Text = "恢复失败: " + ex.Message;
                         btnRestore.IsEnabled = true;
@@ -3485,7 +3491,7 @@ namespace AntigravityDesktopClient
                 try
                 {
                     SendApiPost(endpoint, "{}");
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         btnToggleCore.IsEnabled = true;
                         FetchDashboardData();
@@ -3493,7 +3499,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         btnToggleCore.IsEnabled = true;
                         MessageBox.Show("服务操作失败: " + ex.Message, "AntigravityCodexBridge");
@@ -3829,12 +3835,57 @@ namespace AntigravityDesktopClient
             nodesScroll.Content = panelAvailableNodesList;
             nodeSelSp.Children.Add(nodesScroll);
 
-            StackPanel confirmRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            btnConfirmSelectedNodes = CreateButton("🚀 确认选中的节点并激活独立通道 (已选 0 个)", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
-            btnConfirmSelectedNodes.Padding = new Thickness(20, 8, 20, 8);
-            btnConfirmSelectedNodes.Click += (s, e) => ApplySelectedNodesToEgress();
-            confirmRow.Children.Add(btnConfirmSelectedNodes);
-            nodeSelSp.Children.Add(confirmRow);
+            // 3-Phase Activation Guided Action Bar
+            Border stepsCard = new Border
+            {
+                Background = new SolidColorBrush(isDarkMode ? System.Windows.Media.Color.FromArgb(30, 245, 158, 11) : System.Windows.Media.Color.FromArgb(20, 245, 158, 11)),
+                BorderBrush = new SolidColorBrush(ColAmber),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(12, 10, 12, 10),
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            StackPanel stepsSp = new StackPanel();
+
+            TextBlock txtStepsTitle = new TextBlock
+            {
+                Text = "⚡ 独立通道安全三步激活向导（防止内存覆盖与出口错位）",
+                FontWeight = FontWeights.Bold,
+                FontSize = 12,
+                Foreground = new SolidColorBrush(ColAmber),
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            stepsSp.Children.Add(txtStepsTitle);
+
+            Grid stepsBtnGrid = new Grid();
+            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            btnPreparePlan = CreateButton("① 🚀 生成待应用计划", ColPrimary, System.Windows.Media.Brushes.White, 11, true);
+            btnPreparePlan.Padding = new Thickness(8, 6, 8, 6);
+            btnPreparePlan.Click += (s, e) => PrepareSelectedNodesPlan();
+            btnConfirmSelectedNodes = btnPreparePlan;
+            Grid.SetColumn(btnPreparePlan, 0);
+            stepsBtnGrid.Children.Add(btnPreparePlan);
+
+            btnCommitPending = CreateButton("② 🔒 退出西游云后安全写入", ColCardMuted, new SolidColorBrush(ColTextMuted), 11, true);
+            btnCommitPending.Padding = new Thickness(8, 6, 8, 6);
+            btnCommitPending.Click += (s, e) => CommitPendingXiyouScriptAction();
+            Grid.SetColumn(btnCommitPending, 2);
+            stepsBtnGrid.Children.Add(btnCommitPending);
+
+            btnVerifyActivation = CreateButton("③ 🔍 启动西游云后验证出口", ColCardMuted, new SolidColorBrush(ColTextMuted), 11, true);
+            btnVerifyActivation.Padding = new Thickness(8, 6, 8, 6);
+            btnVerifyActivation.Click += (s, e) => VerifyPendingActivationAction();
+            Grid.SetColumn(btnVerifyActivation, 4);
+            stepsBtnGrid.Children.Add(btnVerifyActivation);
+
+            stepsSp.Children.Add(stepsBtnGrid);
+            stepsCard.Child = stepsSp;
+            nodeSelSp.Children.Add(stepsCard);
 
             cardNodeSelector.Child = nodeSelSp;
             body.Children.Add(cardNodeSelector);
@@ -4049,7 +4100,7 @@ namespace AntigravityDesktopClient
                     if (dict != null && dict.ContainsKey("ok") && !Convert.ToBoolean(dict["ok"]))
                     {
                         string errMsg = dict.ContainsKey("error") ? dict["error"].ToString() : (dict.ContainsKey("message") ? dict["message"].ToString() : "认证失败");
-                        Dispatcher.Invoke(() =>
+                        Dispatcher.Invoke((Action)delegate
                         {
                             txtProxySyncStatus.Text = "⚠️ " + errMsg;
                             txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
@@ -4064,7 +4115,7 @@ namespace AntigravityDesktopClient
                     bool isFallback = dict != null && dict.ContainsKey("isFallback") && Convert.ToBoolean(dict["isFallback"]);
                     string fetchErr = (dict != null && dict.ContainsKey("fetchError")) ? dict["fetchError"].ToString() : "";
 
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         currentFetchedNodes.Clear();
                         if (nodesList != null)
@@ -4121,7 +4172,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         txtProxySyncStatus.Text = "⚠️ 解析节点失败: " + ex.Message;
                         txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
@@ -4294,7 +4345,7 @@ namespace AntigravityDesktopClient
                     var measurements = dict != null && dict.ContainsKey("measurements") ? dict["measurements"] as Dictionary<string, object> : null;
                     if (lats != null)
                     {
-                        Dispatcher.Invoke(() =>
+                        Dispatcher.Invoke((Action)delegate
                         {
                             foreach (var kvp in lats)
                             {
@@ -4335,7 +4386,7 @@ namespace AntigravityDesktopClient
                     var measurements = dict != null && dict.ContainsKey("measurements") ? dict["measurements"] as Dictionary<string, object> : null;
                     if (lats != null)
                     {
-                        Dispatcher.Invoke(() =>
+                        Dispatcher.Invoke((Action)delegate
                         {
                             foreach (var kvp in lats)
                             {
@@ -4391,7 +4442,7 @@ namespace AntigravityDesktopClient
             }
         }
 
-        private void ApplySelectedNodesToEgress()
+        private void PrepareSelectedNodesPlan()
         {
             List<Dictionary<string, object>> selectedList = new List<Dictionary<string, object>>();
             for (int i = 0; i < nodeCheckBoxes.Count; i++)
@@ -4404,13 +4455,12 @@ namespace AntigravityDesktopClient
 
             if (selectedList.Count == 0)
             {
-                MessageBox.Show("请至少勾选 1 个可用节点后再激活独立通道！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("请至少勾选 1 个可用节点后再生成独立通道计划！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
             string subUrl = txtProxySubUrl != null ? txtProxySubUrl.Text.Trim() : "";
-
-            txtProxySyncStatus.Text = string.Format("正在为选中的 {0} 个节点划分独立端口并激活配置...", selectedList.Count);
+            txtProxySyncStatus.Text = string.Format("正在为选中的 {0} 个节点规划稳定端口并生成配置脚本...", selectedList.Count);
             txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
 
             var requestPayload = new Dictionary<string, object>();
@@ -4423,40 +4473,155 @@ namespace AntigravityDesktopClient
             {
                 try
                 {
-                    string res = SendApiPost("api/network/apply-nodes", reqBody);
+                    string res = SendApiPost("api/network/prepare-plan", reqBody);
                     var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
-                    var egressPlan = dict != null && dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
-                    var activation = dict != null && dict.ContainsKey("activation") ? dict["activation"] as Dictionary<string, object> : null;
-                    bool restartRequired = activation != null && activation.ContainsKey("restartRequired") && Convert.ToBoolean(activation["restartRequired"]);
-                    var pendingPorts = activation != null && activation.ContainsKey("pendingPorts") ? activation["pendingPorts"] as ArrayList : null;
+                    var pendingPlan = dict != null && dict.ContainsKey("pendingEgressPlan") ? dict["pendingEgressPlan"] as ArrayList : null;
+                    bool xiyouRunning = dict != null && dict.ContainsKey("xiyouRunning") && Convert.ToBoolean(dict["xiyouRunning"]);
+                    string msg = dict != null && dict.ContainsKey("message") ? dict["message"].ToString() : "计划已生成";
 
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
-                        currentEgressPlanList = egressPlan;
-                        if (restartRequired)
-                        {
-                            txtProxySyncStatus.Text = "⚠️ 链式配置已安全写入；请在西游云切换一次配置或重启西游云，使端口 " + (pendingPorts != null ? string.Join(", ", pendingPorts.ToArray()) : "7892+") + " 开始监听";
-                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
-                            ShowToast("配置已写入，等待西游云重新加载");
-                        }
-                        else
-                        {
-                            txtProxySyncStatus.Text = string.Format("✓ 配置已写入，{0} 个独立端口正在监听 (7892~{1})；可点击下方按钮实测全链路", egressPlan != null ? egressPlan.Count : 0, 7892 + (egressPlan != null ? egressPlan.Count - 1 : 0));
-                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
-                            ShowToast("✓ 独立端口已开始监听");
-                        }
-                        RenderEgressPlanCards(egressPlan);
+                        currentActivationState = "prepared";
+                        currentPendingEgressPlanList = pendingPlan;
+                        txtProxySyncStatus.Text = "① " + msg;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                        UpdateActivationStepButtons();
+                        RenderEgressPlanCards(pendingPlan);
+                        ShowToast("① 计划已生成，请退出西游云后执行安全写入");
                     });
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
-                        txtProxySyncStatus.Text = "⚠️ 划分通道失败: " + ex.Message;
+                        txtProxySyncStatus.Text = "⚠️ 生成计划失败: " + ex.Message;
                         txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
                     });
                 }
             });
+        }
+
+        private void CommitPendingXiyouScriptAction()
+        {
+            txtProxySyncStatus.Text = "正在检查西游云运行状态并执行安全写入...";
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/commit-pending", "{}");
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    string msg = dict != null && dict.ContainsKey("message") ? dict["message"].ToString() : "写入成功";
+
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        currentActivationState = "waiting_restart";
+                        txtProxySyncStatus.Text = "② " + msg;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+                        UpdateActivationStepButtons();
+                        RenderEgressPlanCards(currentPendingEgressPlanList);
+                        ShowToast("② 配置已写入！请打开西游云");
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        txtProxySyncStatus.Text = "⚠️ " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        MessageBox.Show(ex.Message, "西游云安全写入提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    });
+                }
+            });
+        }
+
+        private void VerifyPendingActivationAction()
+        {
+            txtProxySyncStatus.Text = "正在全面验证西游云核心、端口监听及端到端真实出口国家 (TW/SG/US/JP)...";
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/verify-activation", "{}");
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    var activePlan = dict != null && dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
+                    string msg = dict != null && dict.ContainsKey("message") ? dict["message"].ToString() : "验证成功";
+
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        currentActivationState = "active";
+                        currentActiveEgressPlanList = activePlan;
+                        currentEgressPlanList = activePlan;
+                        currentPendingEgressPlanList = null;
+                        txtProxySyncStatus.Text = "✓ " + msg;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                        UpdateActivationStepButtons();
+                        RenderEgressPlanCards(activePlan);
+                        ShowToast("✓ 验证成功，独立出口通道已完全解锁！");
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        currentActivationState = "failed";
+                        txtProxySyncStatus.Text = "❌ 验证失败: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        UpdateActivationStepButtons();
+                        MessageBox.Show(ex.Message, "出口通道验证未通过", MessageBoxButton.OK, MessageBoxImage.Error);
+                    });
+                }
+            });
+        }
+
+        private void UpdateActivationStepButtons()
+        {
+            if (btnPreparePlan == null || btnCommitPending == null || btnVerifyActivation == null) return;
+
+            if (currentActivationState == "inactive")
+            {
+                btnPreparePlan.Background = new SolidColorBrush(ColPrimary);
+                btnPreparePlan.Foreground = System.Windows.Media.Brushes.White;
+                btnCommitPending.Background = new SolidColorBrush(ColCardMuted);
+                btnCommitPending.Foreground = new SolidColorBrush(ColTextMuted);
+                btnVerifyActivation.Background = new SolidColorBrush(ColCardMuted);
+                btnVerifyActivation.Foreground = new SolidColorBrush(ColTextMuted);
+            }
+            else if (currentActivationState == "prepared")
+            {
+                btnPreparePlan.Background = new SolidColorBrush(ColCardMuted);
+                btnPreparePlan.Foreground = new SolidColorBrush(ColTextMain);
+                btnCommitPending.Background = new SolidColorBrush(ColAmber);
+                btnCommitPending.Foreground = System.Windows.Media.Brushes.White;
+                btnVerifyActivation.Background = new SolidColorBrush(ColCardMuted);
+                btnVerifyActivation.Foreground = new SolidColorBrush(ColTextMuted);
+            }
+            else if (currentActivationState == "waiting_restart")
+            {
+                btnPreparePlan.Background = new SolidColorBrush(ColCardMuted);
+                btnPreparePlan.Foreground = new SolidColorBrush(ColTextMuted);
+                btnCommitPending.Background = new SolidColorBrush(ColCardMuted);
+                btnCommitPending.Foreground = new SolidColorBrush(ColTextMain);
+                btnVerifyActivation.Background = new SolidColorBrush(ColPrimary);
+                btnVerifyActivation.Foreground = System.Windows.Media.Brushes.White;
+            }
+            else if (currentActivationState == "active")
+            {
+                btnPreparePlan.Background = new SolidColorBrush(ColCardMuted);
+                btnPreparePlan.Foreground = new SolidColorBrush(ColTextMain);
+                btnCommitPending.Background = new SolidColorBrush(ColCardMuted);
+                btnCommitPending.Foreground = new SolidColorBrush(ColTextMuted);
+                btnVerifyActivation.Background = new SolidColorBrush(ColGreen);
+                btnVerifyActivation.Foreground = System.Windows.Media.Brushes.White;
+            }
+        }
+
+        private void ApplySelectedNodesToEgress()
+        {
+            PrepareSelectedNodesPlan();
         }
 
         private void LoadProxySettingsView()
@@ -4472,11 +4637,25 @@ namespace AntigravityDesktopClient
                         var ns = dict.ContainsKey("networkSettings") ? dict["networkSettings"] as Dictionary<string, object> : null;
                         var egressPlan = dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
 
-                        Dispatcher.Invoke(() =>
+                        Dispatcher.Invoke((Action)delegate
                         {
-                            currentEgressPlanList = egressPlan;
                             if (ns != null)
                             {
+                                var activation = ns.ContainsKey("activation") ? ns["activation"] as Dictionary<string, object> : null;
+                                if (activation != null && activation.ContainsKey("state"))
+                                {
+                                    currentActivationState = activation["state"].ToString();
+                                }
+                                else
+                                {
+                                    currentActivationState = (egressPlan != null && egressPlan.Count > 0) ? "active" : "inactive";
+                                }
+                                currentPendingEgressPlanList = ns.ContainsKey("pendingEgressPlan") ? ns["pendingEgressPlan"] as ArrayList : null;
+                                currentActiveEgressPlanList = egressPlan;
+                                currentEgressPlanList = currentActivationState == "prepared" || currentActivationState == "waiting_restart"
+                                    ? (currentPendingEgressPlanList != null && currentPendingEgressPlanList.Count > 0 ? currentPendingEgressPlanList : egressPlan)
+                                    : egressPlan;
+                                UpdateActivationStepButtons();
                                 string mode = ns.ContainsKey("mode") ? ns["mode"].ToString() : "isolated";
                                 if (mode == "default") rbProxyModeDefault.IsChecked = true;
                                 else rbProxyModeIsolated.IsChecked = true;
@@ -4522,7 +4701,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         if (txtProxySyncStatus != null)
                         {
@@ -4588,11 +4767,16 @@ namespace AntigravityDesktopClient
                 int lat = egressLatencies.ContainsKey(egressId) ? egressLatencies[egressId] : (egressLatencies.ContainsKey(port) ? egressLatencies[port] : 0);
                 string latencyLabel = egressLatencyLabels.ContainsKey(egressId) ? egressLatencyLabels[egressId] : (egressLatencyLabels.ContainsKey(port) ? egressLatencyLabels[port] : "通道全链路");
 
+                System.Windows.Media.Color cardBorderCol = ColBorder;
+                if (currentActivationState == "prepared" || currentActivationState == "waiting_restart") cardBorderCol = ColAmber;
+                else if (currentActivationState == "active") cardBorderCol = ColGreen;
+                else if (currentActivationState == "failed") cardBorderCol = ColRed;
+
                 Border card = new Border
                 {
                     Background = new SolidColorBrush(ColCardMuted),
-                    BorderBrush = new SolidColorBrush(ColBorder),
-                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(cardBorderCol),
+                    BorderThickness = new Thickness(1.5),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(14),
                     Margin = new Thickness(i % 2 == 0 ? 0 : 5, 0, i % 2 == 0 ? 5 : 0, 10)
@@ -4683,7 +4867,7 @@ namespace AntigravityDesktopClient
                     var activation = dict != null && dict.ContainsKey("activation") ? dict["activation"] as Dictionary<string, object> : null;
                     bool restartRequired = activation != null && activation.ContainsKey("restartRequired") && Convert.ToBoolean(activation["restartRequired"]);
 
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         if (txtProxySyncStatus != null)
                         {
@@ -4698,7 +4882,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         if (txtProxySyncStatus != null)
                         {
@@ -4788,11 +4972,13 @@ namespace AntigravityDesktopClient
 
             if (cbNodes.Items.Count == 0)
             {
-                cbNodes.Items.Add(new ProxyNodeItem { Text = "[RULE] 🌐 默认网络（尚未建立独立通道）", Port = 7888, Name = "默认网络 / 规则分流" });
+                cbNodes.Items.Add(new ProxyNodeItem { Text = "[RULE] 🌐 默认网络", Port = 7888, Name = "默认网络 / 规则分流" });
             }
 
             cbNodes.SelectedIndex = 0;
             sp.Children.Add(cbNodes);
+
+            bool isReadyForOAuth = currentActivationState == "active" || cbNodes.Items.Count > 1;
 
             Border tipCard = new Border
             {
@@ -4872,7 +5058,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() => MessageBox.Show("发起 OAuth 登录失败: " + ex.Message));
+                    Dispatcher.Invoke((Action)delegate { MessageBox.Show("发起 OAuth 登录失败: " + ex.Message); });
                 }
             });
         }
@@ -4896,7 +5082,7 @@ namespace AntigravityDesktopClient
                             if (st == "ok")
                             {
                                 try { SendApiPost("api/quota/refresh", "{}"); } catch { }
-                                Dispatcher.Invoke(() =>
+                                Dispatcher.Invoke((Action)delegate
                                 {
                                     FetchDashboardData();
                                     ShowToast("🎉 Google 账号登录成功，额度已同步");
@@ -4937,7 +5123,7 @@ namespace AntigravityDesktopClient
                 try
                 {
                     SendApiPost("api/quota/refresh", "{}", 20000);
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         FetchDashboardData();
                         if (panelAccounts != null)
@@ -4955,7 +5141,7 @@ namespace AntigravityDesktopClient
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.Invoke((Action)delegate
                     {
                         if (panelAccounts != null)
                         {
