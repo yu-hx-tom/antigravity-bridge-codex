@@ -75,10 +75,27 @@ if (fsSync.existsSync(cscPath) && fsSync.existsSync(desktopCsPath)) {
   try {
     const manifestFlag = fsSync.existsSync(manifestPath) ? `/win32manifest:"${manifestPath}"` : "";
     const iconFlag = fsSync.existsSync(icoPath) ? `/win32icon:"${icoPath}"` : "";
-    const compileCmd = `"${cscPath}" /target:winexe /optimize+ /platform:anycpu ${manifestFlag} ${iconFlag} /out:"${targetExePath}" /lib:"${wpfLib}" /r:PresentationFramework.dll,PresentationCore.dll,WindowsBase.dll,System.dll,System.Drawing.dll,System.Windows.Forms.dll,System.Xaml.dll,System.Web.Extensions.dll "${desktopCsPath}"`;
+    const tmpExePath = path.join(APP_DIR, "AntigravityCodexBridge.build.exe");
+    const compileCmd = `"${cscPath}" /target:winexe /optimize+ /platform:anycpu ${manifestFlag} ${iconFlag} /out:"${tmpExePath}" /lib:"${wpfLib}" /r:PresentationFramework.dll,PresentationCore.dll,WindowsBase.dll,System.dll,System.Drawing.dll,System.Windows.Forms.dll,System.Xaml.dll,System.Web.Extensions.dll "${desktopCsPath}"`;
     execSync(compileCmd, { stdio: "inherit" });
     console.log("✓ Native Desktop GUI Client compiled successfully!");
-    await fs.copyFile(targetExePath, path.join(DIST, "AntigravityCodexBridge.exe"));
+
+    if (fsSync.existsSync(targetExePath)) {
+      try {
+        fsSync.unlinkSync(targetExePath);
+      } catch {
+        const oldPath = path.join(APP_DIR, `AntigravityCodexBridge.${Date.now()}.old`);
+        try { fsSync.renameSync(targetExePath, oldPath); } catch {}
+      }
+    }
+    try {
+      fsSync.renameSync(tmpExePath, targetExePath);
+    } catch {
+      fsSync.copyFileSync(tmpExePath, targetExePath);
+    }
+    try {
+      await fs.copyFile(targetExePath, path.join(DIST, "AntigravityCodexBridge.exe"));
+    } catch {}
   } catch (err) {
     throw new Error(`Could not compile Desktop .EXE: ${err.message}`);
   }
