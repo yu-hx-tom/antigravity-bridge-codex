@@ -1450,6 +1450,8 @@ export async function injectXiyouyunRelayScript(egressPlan = []) {
     const scriptItem = {
       id: scriptId,
       label: "Antigravity多端口并发代理脚本",
+      type: "javascript",
+      code: scriptCode,
       content: scriptCode,
       url: null,
     };

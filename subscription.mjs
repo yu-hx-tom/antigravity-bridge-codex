@@ -582,6 +582,7 @@ export function createXiyouOverrideScript(egressPlan = []) {
     listen: "127.0.0.1",
     udp: false,
     proxy: item.proxyName,
+    region: item.region || "",
   }));
 
   return `function main(config) {
@@ -592,16 +593,64 @@ export function createXiyouOverrideScript(egressPlan = []) {
   const desiredListeners = ${JSON.stringify(listeners)};
   const managedProxyNames = new Set(customProxies.map(proxy => proxy.name));
 
+  // 1. 注入自定义代理 (如带新加坡专线链式中转的静态 ISP)
   config.proxies = config.proxies.filter(proxy => !proxy || !managedProxyNames.has(proxy.name));
   const baseProxyNames = new Set(config.proxies.map(proxy => proxy && proxy.name).filter(Boolean));
   for (const proxy of customProxies) {
-    if (proxy["dialer-proxy"] && !baseProxyNames.has(proxy["dialer-proxy"])) continue;
+    if (proxy["dialer-proxy"] && !baseProxyNames.has(proxy["dialer-proxy"])) {
+      const matchedSg = config.proxies.find(p => p && p.name && (p.name.includes("新加坡") || p.name.includes("IEPL")));
+      if (matchedSg) proxy["dialer-proxy"] = matchedSg.name;
+    }
     config.proxies.push(proxy);
   }
 
-  const availableProxyNames = new Set(config.proxies.map(proxy => proxy && proxy.name).filter(Boolean));
-  config.listeners = config.listeners.filter(listener => !String(listener && listener.name || "").startsWith("abc-egress-"));
-  config.listeners.push(...desiredListeners.filter(listener => availableProxyNames.has(listener.proxy)));
+  // 2. 辅助函数：智能匹配目标节点名称
+  function matchProxyName(targetName, targetRegion) {
+    if (!targetName) return null;
+    const exact = config.proxies.find(p => p && p.name === targetName);
+    if (exact) return exact.name;
+
+    const trimmed = targetName.trim().toLowerCase();
+    const matchTrimmed = config.proxies.find(p => p && p.name && p.name.trim().toLowerCase() === trimmed);
+    if (matchTrimmed) return matchTrimmed.name;
+
+    const normTarget = targetName.replace(/[\\s\\-_｜|#\\d]/g, "");
+    const matchFuzzy = config.proxies.find(p => {
+      if (!p || !p.name) return false;
+      const normP = p.name.replace(/[\\s\\-_｜|#\\d]/g, "");
+      return normP.includes(normTarget) || normTarget.includes(normP);
+    });
+    if (matchFuzzy) return matchFuzzy.name;
+
+    if (targetRegion) {
+      const matchRegion = config.proxies.find(p => p && p.name && p.name.includes(targetRegion));
+      if (matchRegion) return matchRegion.name;
+    }
+
+    return null;
+  }
+
+  // 3. 清除所有历史遗留 Listener (包括 abc-egress-*, mixed-*, port-*)
+  config.listeners = config.listeners.filter(listener => {
+    const lName = String(listener && listener.name || "");
+    return !lName.startsWith("abc-egress-") && !lName.startsWith("mixed-") && !lName.startsWith("port-");
+  });
+
+  // 4. 为每个独立端口精准绑定对应的节点出口！
+  for (const item of desiredListeners) {
+    const boundProxy = matchProxyName(item.proxy, item.region);
+    if (boundProxy) {
+      config.listeners.push({
+        name: item.name,
+        type: "mixed",
+        port: Number(item.port),
+        listen: "127.0.0.1",
+        udp: false,
+        proxy: boundProxy
+      });
+    }
+  }
+
   return config;
 }`;
 }
