@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { MihomoRuntimeCoordinator, EgressVerificationError, MihomoActivationRollbackError } from "../mihomo-runtime.mjs";
@@ -94,10 +95,10 @@ test("CASE 1: 4/4 Ready & Geo probe success -> candidate promoted to active", as
   assert.ok(activeContent.includes("abc-egress-7892"));
 });
 
-test("CASE 2: One Geo probe fails -> activation fails, candidate not promoted", async () => {
+test("CASE 2: One probe fails out of two -> partial success and candidate IS promoted", async () => {
   const tmpDir = path.join(os.tmpdir(), `mihomo-test-case2-${Date.now()}`);
   const manager = new MockManager();
-  // 端口 7893 失败
+  // 端口 7893 失败，端口 7892 成功
   const mockProbe = async (port) => {
     if (port === 7893) return { ok: false, error: "Connection timed out" };
     return { ok: true, countryCode: "TW", country: "Taiwan", ip: "1.2.3.4" };
@@ -119,23 +120,26 @@ test("CASE 2: One Geo probe fails -> activation fails, candidate not promoted", 
     { port: 7893, proxyName: "新加坡｜IEPL专线", region: "新加坡" },
   ];
 
-  await assert.rejects(
-    async () => coordinator.activateTransaction({ sourceText: sampleSourceYaml, egressPlan }),
-    EgressVerificationError
-  );
+  const result = await coordinator.activateTransaction({ sourceText: sampleSourceYaml, egressPlan });
 
-  assert.equal(settings.networkSettings.activation.state, "failed");
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "partial");
+  assert.equal(settings.networkSettings.activation.state, "partial");
+  assert.equal(result.summary.active, 1);
+  assert.equal(result.summary.failed, 1);
+
+  // 验证 active.yaml 确实生成并保留
+  const activeExists = fsSync.existsSync(path.join(tmpDir, "compiled", "active.yaml"));
+  assert.ok(activeExists);
 });
 
-test("CASE 3: Expected Taiwan (TW) but got Singapore (SG) -> verified=false & activation fails", async () => {
+test("CASE 3: ALL egress probes fail (0/1) -> triggers full rollback and state=failed", async () => {
   const tmpDir = path.join(os.tmpdir(), `mihomo-test-case3-${Date.now()}`);
   const manager = new MockManager();
-  // 端口 7892 返回 SG 而不是 TW
-  const mockProbe = async (port) => ({
-    ok: true,
-    countryCode: "SG",
-    country: "Singapore",
-    ip: "2.2.2.2",
+  // 全部端口探测失败
+  const mockProbe = async () => ({
+    ok: false,
+    error: "Connection refused",
   });
 
   const settings = { networkSettings: { activation: { state: "inactive" } } };
@@ -157,6 +161,8 @@ test("CASE 3: Expected Taiwan (TW) but got Singapore (SG) -> verified=false & ac
     async () => coordinator.activateTransaction({ sourceText: sampleSourceYaml, egressPlan }),
     EgressVerificationError
   );
+
+  assert.equal(settings.networkSettings.activation.state, "failed");
 });
 
 test("CASE 6: Candidate start fails -> restores previous stable active", async () => {
