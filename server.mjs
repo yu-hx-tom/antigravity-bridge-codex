@@ -1044,7 +1044,6 @@ async function fetchSubscriptionText(url, userAgent = "ClashMeta/v1.18.0 (XiyouY
       "--show-error",
       "--fail",
       "--location",
-      "--compressed",
       "--max-time",
       "12",
       "--proxy",
@@ -1475,50 +1474,75 @@ export async function probeListenerPort(port, timeoutMs = 2000) {
   }
 }
 
+export function getControllerPayload(res) {
+  if (!res) return {};
+  if (res.data && typeof res.data === "object") return res.data;
+  if (res.raw && typeof res.raw === "object") return res.raw;
+  return {};
+}
+
+export const CORE_DELAY_TARGETS = [
+  "https://www.gstatic.com/generate_204",
+  "https://cp.cloudflare.com/generate_204",
+];
+
 /**
- * Layer A: 调用 Mihomo Controller 探测节点本体延迟
+ * Layer A: 调用 Mihomo Controller 探测节点本体延迟 (多目标主备策略)
  */
-export async function probeMihomoProxyDelay(proxyName, { controllerPort = 19090, secret = "", timeoutMs = 5000 } = {}) {
-  const start = Date.now();
+export async function probeMihomoProxyDelay(proxyName, { controllerPort = 19090, timeoutMs = 5000 } = {}) {
+  const attempts = [];
   if (!proxyName) {
-    return { ok: false, stage: "proxy_core", elapsedMs: 0, errorType: "proxy_not_found", errorMessage: "缺少节点代理名称" };
+    return { ok: false, stage: "proxy_core", errorType: "proxy_not_found", errorMessage: "缺少节点代理名称", attempts };
   }
 
-  try {
-    const targetUrl = encodeURIComponent("http://cp.cloudflare.com/generate_204");
-    const pathName = `/proxies/${encodeURIComponent(proxyName)}/delay?timeout=${timeoutMs}&url=${targetUrl}`;
-    const res = await globalMihomoManager.requestController(pathName, { timeoutMs: timeoutMs + 1000 });
-    const elapsedMs = Date.now() - start;
+  for (const url of CORE_DELAY_TARGETS) {
+    const startedAt = Date.now();
+    try {
+      const targetUrl = encodeURIComponent(url);
+      const pathName = `/proxies/${encodeURIComponent(proxyName)}/delay?timeout=${timeoutMs}&url=${targetUrl}`;
+      const res = await globalMihomoManager.requestController(pathName, { timeoutMs: timeoutMs + 1000 });
+      const elapsedMs = Date.now() - startedAt;
+      const payload = getControllerPayload(res);
+      const attempt = {
+        target: url,
+        status: res?.status ?? null,
+        ok: Boolean(res?.ok),
+        elapsedMs,
+        delay: Number(payload?.delay) || null,
+        message: payload?.message || payload?.error || null,
+      };
+      attempts.push(attempt);
 
-    if (res && res.ok) {
-      const delay = res.raw?.delay || elapsedMs;
-      return { ok: true, stage: "proxy_core", proxyName, latencyMs: delay, elapsedMs, errorType: null, errorMessage: null };
+      if (res?.ok) {
+        return {
+          ok: true,
+          stage: "proxy_core",
+          proxyName,
+          latencyMs: Number(payload?.delay) || elapsedMs,
+          attempts,
+          errorType: null,
+          errorMessage: null,
+        };
+      }
+    } catch (err) {
+      attempts.push({
+        target: url,
+        ok: false,
+        status: null,
+        message: err?.message || String(err),
+      });
     }
-
-    const rawMsg = res?.raw?.message || res?.raw?.error || (res ? `HTTP ${res.status}` : "controller error");
-    let errorType = "timeout";
-    if (rawMsg.includes("handshake")) errorType = "tls_error";
-    else if (rawMsg.includes("refused")) errorType = "connection_refused";
-    else if (rawMsg.includes("not found")) errorType = "proxy_not_found";
-
-    return {
-      ok: false,
-      stage: "proxy_core",
-      proxyName,
-      elapsedMs,
-      errorType,
-      errorMessage: `节点本体连通失败: ${rawMsg}`,
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      stage: "proxy_core",
-      proxyName,
-      elapsedMs: Date.now() - start,
-      errorType: e.message.includes("timeout") ? "timeout" : "controller_error",
-      errorMessage: `Mihomo 节点探测异常: ${e.message}`,
-    };
   }
+
+  const lastAttempt = attempts[attempts.length - 1];
+  return {
+    ok: false,
+    stage: "proxy_core",
+    proxyName,
+    attempts,
+    errorType: attempts.every((a) => String(a.message || "").includes("timeout")) ? "timeout" : "core_probe_failed",
+    errorMessage: `Controller 辅助探测失败: ${lastAttempt?.message || "DNS/握手超时"}`,
+  };
 }
 
 export const INTERNET_PROBE_TARGETS = [
@@ -1801,27 +1825,25 @@ export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
     error: null,
   };
 
-  // 1. Layer B: Listener 探测
+  // 1. Layer B: Listener 探测 (硬门禁)
   const lRes = await probeListenerPort(port, 1000);
   result.diagnostics.listener = lRes;
   result.listenerOk = lRes.ok;
   if (!lRes.ok) {
+    result.state = "failed";
+    result.verified = false;
     result.error = lRes.errorMessage;
     return result;
   }
 
-  // 2. Layer A: Proxy Core (Mihomo Controller)
+  // 2. Layer A: Proxy Core (Mihomo Controller 辅助探测，不提前 return)
   const coreRes = await probeMihomoProxyDelay(proxyName, { controllerPort, timeoutMs: 5000 });
   result.diagnostics.proxyCore = coreRes;
   result.proxyCoreOk = coreRes.ok;
   result.latencyMs = coreRes.latencyMs || null;
-  if (!coreRes.ok) {
-    result.error = coreRes.errorMessage;
-    return result;
-  }
 
-  // 3. Layer C: Internet (多目标 204 探测)
-  let netRes = await probeInternetThroughListener(port, 4000);
+  // 3. Layer C: Internet (通过 Listener 的多目标 204 探测)
+  let netRes = await probeInternetThroughListener(port, 5000);
   result.diagnostics.internet = netRes;
   result.internetOk = netRes.ok;
 
@@ -1829,7 +1851,7 @@ export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
   const geoRes = await probeGeoThroughListener(port, 5000);
   result.diagnostics.geo = geoRes;
 
-  // 指导第 13 条：Geo 成功兜底 Internet (如果 204 探测 502/timeout，但 Geo 明确拿到了出口公网 IP)
+  // 指导第 15 条：Geo 成功兜底 Internet (如果 204 探测 502/timeout，但 Geo 明确拿到了出口公网 IP)
   if (!result.internetOk && geoRes.ok && geoRes.ip) {
     result.internetOk = true;
     result.diagnostics.internet = {
@@ -1840,8 +1862,11 @@ export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
     };
   }
 
+  // 如果真实公网无法连通，判定为 failed
   if (!result.internetOk) {
-    result.error = result.diagnostics.internet.errorMessage || "公网不可达";
+    result.state = "failed";
+    result.verified = false;
+    result.error = result.diagnostics.internet?.errorMessage || "真实公网出口不可达";
     return result;
   }
 
@@ -1851,15 +1876,21 @@ export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
   let finalState = "active";
   let mismatchReason = "";
 
-  if (!realCode || geoRes.isRateLimited || geoRes.errorType === "geo_service_error") {
-    // Geo 限流或未知，但公网正常 -> 判定为 active_geo_unknown，出口正常可用
-    geoOk = false;
-    finalState = "active_geo_unknown";
-    mismatchReason = "出口已连通，但 Geo 服务限流或未返回明确地区代码";
-  } else if (expectedCode && realCode !== expectedCode && !item.isCustomIsp) {
+  if (expectedCode && realCode && realCode !== expectedCode && !item.isCustomIsp) {
+    // 地区明确不符合 (硬安全约束保留)
     geoOk = false;
     finalState = "failed";
     mismatchReason = `预期出口为 [${expectedCode}/${targetRegion}]，实测出口为 [${realCode}/${geoRes.country || "未知"}]`;
+  } else if (!realCode || geoRes.isRateLimited || geoRes.errorType === "geo_service_error") {
+    // Geo 限流或未知，但公网正常 -> active_geo_unknown (usable)
+    geoOk = false;
+    finalState = "active_geo_unknown";
+    mismatchReason = "出口已连通，但 Geo 服务限流或未返回明确地区代码";
+  } else if (!result.proxyCoreOk) {
+    // 数据面通达，但 Controller 辅助探测异常 -> active_with_warning (usable)
+    geoOk = true;
+    finalState = "active_with_warning";
+    mismatchReason = coreRes.errorMessage || "Controller 辅助延迟探测失败";
   } else {
     geoOk = true;
     finalState = "active";
@@ -1867,7 +1898,7 @@ export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
 
   result.geoOk = geoOk;
   result.state = finalState;
-  result.verified = (finalState === "active" || finalState === "active_geo_unknown");
+  result.verified = (finalState === "active" || finalState === "active_with_warning" || finalState === "active_geo_unknown");
   result.realGeo = {
     ip: geoRes.ip || "",
     countryCode: realCode || "GLOBAL",
@@ -1875,7 +1906,7 @@ export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
     region: geoRes.region || "",
     isp: geoRes.isp || "",
   };
-  result.error = result.verified ? null : mismatchReason;
+  result.error = result.verified ? (finalState === "active" ? null : mismatchReason) : mismatchReason;
 
   return result;
 }
@@ -2193,7 +2224,8 @@ export async function requireVerifiedEgress(proxyPort = 0, { requireListening = 
   }
 
   const activation = netSettings.activation || {};
-  if (activation.state !== "active") {
+  const activationUsable = activation.state === "active" || activation.state === "partial";
+  if (!activationUsable) {
     throw new Error(`[多通道安全隔离门禁] 多通道网络尚未完全就绪 (当前状态: ${activation.state || "inactive"})，已拦截操作。请先在网络设置中激活通道。`);
   }
 
@@ -2203,7 +2235,7 @@ export async function requireVerifiedEgress(proxyPort = 0, { requireListening = 
     throw new Error(`[多通道安全隔离门禁] 端口 ${port} 未在已激活的独立通道计划中登记，严禁使用非授权出口！`);
   }
 
-  if (matched.verified === false) {
+  if (matched.verified === false || matched.internetOk === false) {
     throw new Error(`[多通道安全隔离门禁] 端口 ${port} (${matched.proxyName || matched.proxy}) 未通过全链路真实出口验证，禁止发起认证或流量！`);
   }
 

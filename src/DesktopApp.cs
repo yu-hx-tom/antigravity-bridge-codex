@@ -2414,6 +2414,19 @@ namespace AntigravityDesktopClient
             return json;
         }
 
+        private bool? ReadNullableBool(Dictionary<string, object> item, string key)
+        {
+            if (item == null || !item.ContainsKey(key) || item[key] == null) return null;
+            try
+            {
+                return Convert.ToBoolean(item[key]);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private string SendApiGet(string endpoint, int timeoutMs = 5000)
         {
             if (string.IsNullOrEmpty(bridgeKey)) LoadBridgeKey();
@@ -5058,59 +5071,97 @@ namespace AntigravityDesktopClient
                 };
                 cardSp.Children.Add(tbSub);
 
-                // Layer A~D 诊断指示条
+                // Layer A~D 诊断指示条 (三态诚实渲染: true/false/unknown)
                 var diag = item.ContainsKey("diagnostics") ? item["diagnostics"] as Dictionary<string, object> : null;
-                if (diag != null || item.ContainsKey("state"))
+                if (diag != null || item.ContainsKey("state") || item.ContainsKey("proxyCoreOk"))
                 {
                     WrapPanel diagPanel = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
 
                     // 1. 节点本体
-                    bool coreOk = item.ContainsKey("proxyCoreOk") ? Convert.ToBoolean(item["proxyCoreOk"]) : true;
+                    bool? coreOk = ReadNullableBool(item, "proxyCoreOk");
+                    string coreText = coreOk.HasValue ? (coreOk.Value ? "本体 ✓" : "本体 ⚠") : "本体 ?";
+                    System.Windows.Media.Color coreBg = coreOk.HasValue ? (coreOk.Value ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 245, 158, 11)) : System.Windows.Media.Color.FromArgb(20, 148, 163, 184);
+                    System.Windows.Media.Color coreFg = coreOk.HasValue ? (coreOk.Value ? ColGreen : ColAmber) : ColTextMuted;
+
                     Border bCore = new Border
                     {
-                        Background = new SolidColorBrush(coreOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
+                        Background = new SolidColorBrush(coreBg),
                         CornerRadius = new CornerRadius(3),
                         Padding = new Thickness(4, 1, 4, 1),
                         Margin = new Thickness(0, 0, 4, 2)
                     };
-                    bCore.Child = new TextBlock { Text = coreOk ? "本体 ✓" : "本体 ✗", FontSize = 9, Foreground = new SolidColorBrush(coreOk ? ColGreen : ColRed) };
+                    bCore.Child = new TextBlock { Text = coreText, FontSize = 9, Foreground = new SolidColorBrush(coreFg) };
                     diagPanel.Children.Add(bCore);
 
                     // 2. Listener
-                    bool listOk = item.ContainsKey("listenerOk") ? Convert.ToBoolean(item["listenerOk"]) : true;
+                    bool? listOk = ReadNullableBool(item, "listenerOk");
+                    string listText = listOk.HasValue ? (listOk.Value ? "端口 ✓" : "端口 ✗") : "端口 ?";
+                    System.Windows.Media.Color listBg = listOk.HasValue ? (listOk.Value ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)) : System.Windows.Media.Color.FromArgb(20, 148, 163, 184);
+                    System.Windows.Media.Color listFg = listOk.HasValue ? (listOk.Value ? ColGreen : ColRed) : ColTextMuted;
+
                     Border bList = new Border
                     {
-                        Background = new SolidColorBrush(listOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
+                        Background = new SolidColorBrush(listBg),
                         CornerRadius = new CornerRadius(3),
                         Padding = new Thickness(4, 1, 4, 1),
                         Margin = new Thickness(0, 0, 4, 2)
                     };
-                    bList.Child = new TextBlock { Text = listOk ? "端口 ✓" : "端口 ✗", FontSize = 9, Foreground = new SolidColorBrush(listOk ? ColGreen : ColRed) };
+                    bList.Child = new TextBlock { Text = listText, FontSize = 9, Foreground = new SolidColorBrush(listFg) };
                     diagPanel.Children.Add(bList);
 
                     // 3. 公网
-                    bool netOk = item.ContainsKey("internetOk") ? Convert.ToBoolean(item["internetOk"]) : true;
+                    bool? netOk = ReadNullableBool(item, "internetOk");
+                    string netText = netOk.HasValue ? (netOk.Value ? "公网 ✓" : "公网 ✗") : "公网 ?";
+                    System.Windows.Media.Color netBg = netOk.HasValue ? (netOk.Value ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)) : System.Windows.Media.Color.FromArgb(20, 148, 163, 184);
+                    System.Windows.Media.Color netFg = netOk.HasValue ? (netOk.Value ? ColGreen : ColRed) : ColTextMuted;
+
                     Border bNet = new Border
                     {
-                        Background = new SolidColorBrush(netOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
+                        Background = new SolidColorBrush(netBg),
                         CornerRadius = new CornerRadius(3),
                         Padding = new Thickness(4, 1, 4, 1),
                         Margin = new Thickness(0, 0, 4, 2)
                     };
-                    bNet.Child = new TextBlock { Text = netOk ? "公网 ✓" : "公网 ✗", FontSize = 9, Foreground = new SolidColorBrush(netOk ? ColGreen : ColRed) };
+                    bNet.Child = new TextBlock { Text = netText, FontSize = 9, Foreground = new SolidColorBrush(netFg) };
                     diagPanel.Children.Add(bNet);
 
                     // 4. Geo
-                    bool gOk = item.ContainsKey("geoOk") ? Convert.ToBoolean(item["geoOk"]) : false;
-                    string geoLabel = gOk ? (country + " ✓") : (netOk ? "地区待确认" : "地区 ✗");
+                    bool? gOk = ReadNullableBool(item, "geoOk");
+                    string geoLabel;
+                    System.Windows.Media.Color geoBg;
+                    System.Windows.Media.Color geoFg;
+
+                    if (gOk.HasValue)
+                    {
+                        if (gOk.Value)
+                        {
+                            geoLabel = country + " ✓";
+                            geoBg = System.Windows.Media.Color.FromArgb(20, 34, 197, 94);
+                            geoFg = ColGreen;
+                        }
+                        else
+                        {
+                            bool isNetActive = netOk.HasValue && netOk.Value;
+                            geoLabel = isNetActive ? "地区待确认" : "地区 ✗";
+                            geoBg = isNetActive ? System.Windows.Media.Color.FromArgb(20, 245, 158, 11) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68);
+                            geoFg = isNetActive ? ColAmber : ColRed;
+                        }
+                    }
+                    else
+                    {
+                        geoLabel = "地区 ?";
+                        geoBg = System.Windows.Media.Color.FromArgb(20, 148, 163, 184);
+                        geoFg = ColTextMuted;
+                    }
+
                     Border bGeo = new Border
                     {
-                        Background = new SolidColorBrush(gOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : (netOk ? System.Windows.Media.Color.FromArgb(20, 245, 158, 11) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68))),
+                        Background = new SolidColorBrush(geoBg),
                         CornerRadius = new CornerRadius(3),
                         Padding = new Thickness(4, 1, 4, 1),
                         Margin = new Thickness(0, 0, 4, 2)
                     };
-                    bGeo.Child = new TextBlock { Text = geoLabel, FontSize = 9, Foreground = new SolidColorBrush(gOk ? ColGreen : (netOk ? ColAmber : ColRed)) };
+                    bGeo.Child = new TextBlock { Text = geoLabel, FontSize = 9, Foreground = new SolidColorBrush(geoFg) };
                     diagPanel.Children.Add(bGeo);
 
                     cardSp.Children.Add(diagPanel);

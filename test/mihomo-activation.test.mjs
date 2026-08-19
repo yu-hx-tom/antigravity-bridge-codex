@@ -346,3 +346,51 @@ test("CASE C: Both 204 endpoints fail but Geo API returns public IP -> fallback 
   assert.equal(result.egressPlan[0].verified, true);
   assert.equal(result.egressPlan[0].diagnostics.internet.recoveredBy, "geo_probe");
 });
+
+test("CASE 14 (V0.4.1.4 现场根因): Controller Delay fails with HTTP 503 (DNS failure) but Listener Internet & Geo succeed -> promoted as active_with_warning", async () => {
+  const tmpDir = path.join(os.tmpdir(), `mihomo-test-case14-${Date.now()}`);
+  const manager = new MockManager();
+
+  // 模拟现场根因：Controller Delay 返回 503 DNS 解析失败，但 Listener Internet 与 Geo 均通畅
+  const mockVerifyEgress = async (item) => ({
+    ...item,
+    listenerOk: true,
+    proxyCoreOk: false, // 模拟 503 报错
+    internetOk: true,
+    geoOk: true,
+    state: "active_with_warning",
+    verified: true,
+    latencyMs: 135,
+    diagnostics: {
+      listener: { ok: true },
+      proxyCore: { ok: false, errorMessage: "Controller 辅助探测失败: dns resolve failed" },
+      internet: { ok: true },
+      geo: { ok: true, countryCode: "TW" },
+    },
+  });
+
+  const settings = { networkSettings: { activation: { state: "inactive" } } };
+  const runtime = { egressPlan: [] };
+
+  const coordinator = new MihomoRuntimeCoordinator({
+    dataDir: tmpDir,
+    manager,
+    verifyEgressFn: mockVerifyEgress,
+    saveSettingsFn: async () => {},
+  });
+  coordinator.init({ runtime, settings });
+
+  const egressPlan = [
+    { port: 7892, proxyName: "台湾｜高速-家宽", region: "台湾" },
+  ];
+
+  const result = await coordinator.activateTransaction({ sourceText: sampleSourceYaml, egressPlan });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "active"); // 单节点 active_with_warning 被计入 usable 且无 failed，最终事务为 active
+  assert.equal(result.egressPlan[0].verified, true);
+  assert.equal(result.egressPlan[0].state, "active_with_warning");
+  assert.equal(result.summary.warning, 1);
+  assert.equal(result.summary.usable, 1);
+  assert.equal(result.summary.failed, 0);
+});

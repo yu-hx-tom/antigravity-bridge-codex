@@ -22,26 +22,26 @@ export class MihomoActivationRollbackError extends Error {
 }
 
 /**
- * 唯一出口可用性判定函数 (指导第 6 条)
+ * 唯一出口可用性判定函数 (指导第 10 & 40 条)
+ * 只要 Listener 本地监听且 Internet 真实通达，无论 Controller 辅助探测是否异常，均判定为 usable
  */
 export function isEgressUsable(item) {
   if (!item) return false;
-  const isOk = Boolean(
+  return Boolean(
     item.listenerOk === true &&
-    item.proxyCoreOk === true &&
     item.internetOk === true &&
-    (item.state === "active" || item.state === "active_geo_unknown")
+    (item.state === "active" || item.state === "active_with_warning" || item.state === "active_geo_unknown")
   );
-  return isOk;
 }
 
 /**
- * 统一计划汇总 (指导第 32 条)
+ * 统一计划汇总 (指导第 41 条)
  */
 export function summarizePlan(plan = []) {
   const summary = {
     requested: plan.length,
     active: 0,
+    warning: 0,
     geoUnknown: 0,
     failed: 0,
     usable: 0,
@@ -50,6 +50,9 @@ export function summarizePlan(plan = []) {
   for (const item of plan) {
     if (item.state === "active") {
       summary.active++;
+      summary.usable++;
+    } else if (item.state === "active_with_warning") {
+      summary.warning++;
       summary.usable++;
     } else if (item.state === "active_geo_unknown") {
       summary.geoUnknown++;
@@ -63,13 +66,13 @@ export function summarizePlan(plan = []) {
 }
 
 /**
- * 状态分类 (指导第 31 条)
+ * 状态分类 (指导第 12 条)
  */
 export function classifyEgressState(r) {
-  if (!r.proxyCoreOk) return "failed";
   if (!r.listenerOk) return "failed";
   if (!r.internetOk) return "failed";
   if (!r.geoOk) return "active_geo_unknown";
+  if (!r.proxyCoreOk) return "active_with_warning";
   return "active";
 }
 
@@ -86,6 +89,25 @@ export class MihomoRuntimeCoordinator {
     this.runtimeRef = null;
     this.crashRecoveryCount = 0;
     this.crashRecoveryTimer = null;
+  }
+
+  /**
+   * 统一同步 runtime 与 settings 中的 egressPlan (指导第 17 条)
+   */
+  async syncRuntimeEgressPlan(plan) {
+    const nextPlan = Array.isArray(plan) ? plan : [];
+    if (this.runtimeRef) {
+      this.runtimeRef.egressPlan = nextPlan;
+    }
+    if (this.runtimeSettingsRef) {
+      if (!this.runtimeSettingsRef.networkSettings) {
+        this.runtimeSettingsRef.networkSettings = {};
+      }
+      this.runtimeSettingsRef.networkSettings.egressPlan = nextPlan;
+    }
+    if (this.saveSettingsFn) {
+      await this.saveSettingsFn();
+    }
   }
 
   init({ runtime, settings }) {
@@ -387,31 +409,34 @@ export class MihomoRuntimeCoordinator {
         await fs.copyFile(prevPath, activePath);
         await fs.copyFile(prevMetaPath, activeMetaPath);
 
+        const restoredPlan = metaToRestore.egressPlan || [];
+        const restoredPorts = restoredPlan
+          .filter((x) => x.verified === true)
+          .map((x) => Number(x.port));
+
         // 重新拉起稳定配置
         await this.manager.start({
           configPath: activePath,
           controllerPort: metaToRestore.controllerPort || 19090,
           secret: metaToRestore.controllerSecret || "",
-          expectedPorts: metaToRestore.expectedPorts || [],
+          expectedPorts: metaToRestore.expectedPorts || restoredPorts,
         });
 
-        // 恢复 runtime 计划与 active 状态
-        if (this.runtimeRef) {
-          this.runtimeRef.egressPlan = metaToRestore.egressPlan || [];
-        }
-        await this.setActivationState("active", {
+        // 恢复 runtime 与 settings 计划
+        await this.syncRuntimeEgressPlan(restoredPlan);
+
+        const restoredState = metaToRestore.state === "partial" ? "partial" : "active";
+        await this.setActivationState(restoredState, {
           generationId: metaToRestore.generationId,
           configHash: metaToRestore.configHash,
-          expectedPorts: metaToRestore.expectedPorts,
+          expectedPorts: metaToRestore.expectedPorts || restoredPorts,
           verifiedAt: metaToRestore.verifiedAt,
         });
 
-        this.log(`[mihomo] ✓ 上一稳定版本配置已成功回滚并恢复运行`);
+        this.log(`[mihomo] ✓ 上一稳定版本配置已成功回滚并恢复运行 (状态: ${restoredState})`);
       } else {
         // 无可用 previous，恢复为 failed
-        if (this.runtimeRef) {
-          this.runtimeRef.egressPlan = [];
-        }
+        await this.syncRuntimeEgressPlan([]);
         await this.setActivationState("failed", { failure: originalError.message });
         this.log(`[mihomo] 没有可恢复的旧版本配置，已重置为未激活状态`, "warn");
       }
@@ -466,7 +491,7 @@ export class MihomoRuntimeCoordinator {
     });
 
     const candidateMeta = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       generationId,
       configHash,
       controllerPort,
@@ -570,9 +595,8 @@ export class MihomoRuntimeCoordinator {
       // 切换 manager 激活路径指向 active.yaml
       this.manager.activeConfigPath = activePath;
 
-      if (this.runtimeRef) {
-        this.runtimeRef.egressPlan = verifiedPlan;
-      }
+      // 原子同步 runtime 与 settings
+      await this.syncRuntimeEgressPlan(verifiedPlan);
 
       await this.setActivationState(finalState, {
         generationId,
@@ -615,7 +639,8 @@ export class MihomoRuntimeCoordinator {
       if (fsSync.existsSync(activePath) && fsSync.existsSync(activeMetaPath)) {
         try {
           const meta = JSON.parse(await fs.readFile(activeMetaPath, "utf8"));
-          await this.setActivationState("active", {
+          const targetState = meta.state === "partial" ? "partial" : "active";
+          await this.setActivationState(targetState, {
             generationId: meta.generationId,
             configHash: meta.configHash,
             expectedPorts: meta.expectedPorts,
@@ -632,11 +657,12 @@ export class MihomoRuntimeCoordinator {
   }
 
   /**
-   * 重启后自动恢复 Embedded Mihomo 稳定运行
+   * 重启后自动恢复 Embedded Mihomo 稳定运行 (支持 active 与 partial)
    */
   async recoverEmbeddedMihomo() {
     const netSettings = this.runtimeSettingsRef?.networkSettings || {};
-    if (netSettings.mode !== "isolated" || netSettings.activation?.state !== "active") {
+    const restorableStates = ["active", "partial"];
+    if (netSettings.mode !== "isolated" || !restorableStates.includes(netSettings.activation?.state)) {
       return { ok: true, skipped: true };
     }
 
@@ -668,11 +694,16 @@ export class MihomoRuntimeCoordinator {
         skipPreflight: true,
       });
 
-      if (this.runtimeRef) {
-        this.runtimeRef.egressPlan = meta.egressPlan || [];
-      }
+      const restoredState = meta.state === "partial" ? "partial" : "active";
+      await this.syncRuntimeEgressPlan(meta.egressPlan || []);
+      await this.setActivationState(restoredState, {
+        generationId: meta.generationId,
+        configHash: meta.configHash,
+        expectedPorts: meta.expectedPorts,
+        verifiedAt: meta.verifiedAt,
+      });
 
-      this.log(`[mihomo] ✓ 已成功从磁盘恢复独立内核及多通道监听`);
+      this.log(`[mihomo] ✓ 已成功从磁盘恢复独立内核及多通道监听 (状态: ${restoredState})`);
       return { ok: true, recovered: true };
     } catch (err) {
       this.log(`[mihomo] 恢复运行失败: ${err.message}`, "error");
