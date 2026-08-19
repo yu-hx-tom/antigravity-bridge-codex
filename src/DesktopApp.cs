@@ -4622,6 +4622,19 @@ namespace AntigravityDesktopClient
                         throw new InvalidOperationException("后端未返回任何有效独立通道");
                     }
 
+                    // 从服务端拉取最新真实 status 作为唯一事实来源 (指导第 18 条)
+                    try
+                    {
+                        string statusJson = SendApiGet("api/network/status", 5000);
+                        var statusDict = jsonSerializer.Deserialize<Dictionary<string, object>>(statusJson);
+                        if (statusDict != null && statusDict.ContainsKey("egressPlan"))
+                        {
+                            var sPlan = statusDict["egressPlan"] as ArrayList;
+                            if (sPlan != null) activePlan = sPlan;
+                        }
+                    }
+                    catch {}
+
                     Dispatcher.Invoke((Action)delegate
                     {
                         if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
@@ -4644,6 +4657,7 @@ namespace AntigravityDesktopClient
                         txtProxySyncStatus.Text = "⚠️ 启动独立通道失败: " + ex.Message;
                         txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
                         MessageBox.Show(ex.Message, "独立内核启动提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        LoadProxySettingsView();
                     });
                 }
             });

@@ -21,12 +21,65 @@ export class MihomoActivationRollbackError extends Error {
   }
 }
 
+/**
+ * 唯一出口可用性判定函数 (指导第 6 条)
+ */
+export function isEgressUsable(item) {
+  if (!item) return false;
+  const isOk = Boolean(
+    item.listenerOk === true &&
+    item.proxyCoreOk === true &&
+    item.internetOk === true &&
+    (item.state === "active" || item.state === "active_geo_unknown")
+  );
+  return isOk;
+}
+
+/**
+ * 统一计划汇总 (指导第 32 条)
+ */
+export function summarizePlan(plan = []) {
+  const summary = {
+    requested: plan.length,
+    active: 0,
+    geoUnknown: 0,
+    failed: 0,
+    usable: 0,
+  };
+
+  for (const item of plan) {
+    if (item.state === "active") {
+      summary.active++;
+      summary.usable++;
+    } else if (item.state === "active_geo_unknown") {
+      summary.geoUnknown++;
+      summary.usable++;
+    } else {
+      summary.failed++;
+    }
+  }
+
+  return summary;
+}
+
+/**
+ * 状态分类 (指导第 31 条)
+ */
+export function classifyEgressState(r) {
+  if (!r.proxyCoreOk) return "failed";
+  if (!r.listenerOk) return "failed";
+  if (!r.internetOk) return "failed";
+  if (!r.geoOk) return "active_geo_unknown";
+  return "active";
+}
+
 export class MihomoRuntimeCoordinator {
-  constructor({ dataDir, manager, probeGeoFn, saveSettingsFn, addLogFn } = {}) {
+  constructor({ dataDir, manager, verifyEgressFn, probeGeoFn, saveSettingsFn, addLogFn } = {}) {
     this.dataDir = dataDir || path.join(process.cwd(), ".data", "mihomo");
     this.compiledDir = path.join(this.dataDir, "compiled");
     this.manager = manager;
-    this.probeGeoFn = probeGeoFn;
+    this.verifyEgressFn = verifyEgressFn || null;
+    this.probeGeoFn = probeGeoFn || null;
     this.saveSettingsFn = saveSettingsFn;
     this.addLogFn = addLogFn || (() => {});
     this.runtimeSettingsRef = null;
@@ -271,26 +324,36 @@ export class MihomoRuntimeCoordinator {
   }
 
   /**
-   * 严密比对并核验所有出口通道 (四层分层探测)
+   * 严密比对并核验所有出口通道 (统一调用 verifyEgressFn，收集四层结果)
    */
-  async verifyEgressPlan(egressPlan, options = {}) {
+  async verifyEgressPlan(egressPlan, context = {}) {
     const verifiedPlan = [];
-    const failedDetails = [];
 
     for (const item of egressPlan) {
-      const res = await this.verifyOneEgress(item, options);
-      verifiedPlan.push(res);
-      if (!res.verified && res.error) {
-        failedDetails.push(`端口 ${res.port} (${res.proxyName || res.proxy}): ${res.error}`);
+      try {
+        let res;
+        if (this.verifyEgressFn) {
+          res = await this.verifyEgressFn(item, context);
+        } else {
+          res = await this.verifyOneEgress(item, context);
+        }
+        res.verified = isEgressUsable(res);
+        verifiedPlan.push(res);
+      } catch (err) {
+        verifiedPlan.push({
+          ...item,
+          state: "failed",
+          proxyCoreOk: false,
+          listenerOk: false,
+          internetOk: false,
+          geoOk: false,
+          verified: false,
+          errorType: "verification_exception",
+          errorMessage: err?.message || String(err),
+          diagnostics: {},
+          error: err?.message || "验证异常",
+        });
       }
-    }
-
-    const activeCount = verifiedPlan.filter((p) => p.verified === true).length;
-    if (activeCount === 0 && verifiedPlan.length > 0) {
-      throw new EgressVerificationError(
-        `所有独立通道均验证失败 (0/${verifiedPlan.length} 可用):\n${failedDetails.join("\n")}`,
-        failedDetails
-      );
     }
 
     return verifiedPlan;
@@ -460,26 +523,34 @@ export class MihomoRuntimeCoordinator {
     // 5. VERIFY ALL EGRESS
     await this.setActivationState("verifying", { generationId });
     this.log(`[mihomo] 开始物理核验全部 ${expectedPorts.length} 个独立出口通道...`);
-    let verifiedPlan = [];
-    try {
-      verifiedPlan = await this.verifyEgressPlan(egressPlan);
-    } catch (verifyErr) {
+    const verifiedPlan = await this.verifyEgressPlan(egressPlan, { controllerPort, secret });
+
+    const usablePlan = verifiedPlan.filter(isEgressUsable);
+    const failedPlan = verifiedPlan.filter((item) => !isEgressUsable(item));
+    const summary = summarizePlan(verifiedPlan);
+
+    attemptRecord.egressPlan = verifiedPlan;
+    attemptRecord.summary = summary;
+    if (this.runtimeRef) this.runtimeRef.lastActivationAttempt = attemptRecord;
+
+    if (usablePlan.length === 0 && egressPlan.length > 0) {
+      const errDetails = failedPlan.map((p) => `端口 ${p.port} (${p.proxyName || p.proxy}): ${p.error || p.errorMessage || "验证未通过"}`);
+      const verifyErr = new EgressVerificationError(
+        `所有独立通道均验证失败 (0/${egressPlan.length} 可用):\n${errDetails.join("\n")}`,
+        errDetails
+      );
       attemptRecord.errors.push(verifyErr.message);
-      attemptRecord.egressPlan = verifiedPlan;
-      if (this.runtimeRef) this.runtimeRef.lastActivationAttempt = attemptRecord;
       await this.rollbackMihomoActivation(verifyErr, currentActiveMeta);
       throw verifyErr;
     }
 
-    const activeCount = verifiedPlan.filter((p) => p.verified === true).length;
-    const failedCount = verifiedPlan.filter((p) => p.verified !== true).length;
-    const finalState = failedCount > 0 ? "partial" : "active";
+    const finalState = failedPlan.length > 0 ? "partial" : "active";
 
     attemptRecord.egressPlan = verifiedPlan;
     if (this.runtimeRef) this.runtimeRef.lastActivationAttempt = attemptRecord;
 
     // 6. PROMOTE (至少 1 个通道成功，正式 Promote Candidate)
-    this.log(`[mihomo] 出口验证完成 (${activeCount} 成功, ${failedCount} 失败)，正在 Promote Candidate 为 ${finalState}...`);
+    this.log(`[mihomo] 出口验证完成 (${summary.usable} 可用 [${summary.active} 地区匹配, ${summary.geoUnknown} 地区未知], ${summary.failed} 失败)，正在 Promote Candidate 为 ${finalState}...`);
     try {
       // 备份原 active 到 previous
       if (fsSync.existsSync(activePath)) {
@@ -517,11 +588,7 @@ export class MihomoRuntimeCoordinator {
         state: finalState,
         generationId,
         egressPlan: verifiedPlan,
-        summary: {
-          requested: egressPlan.length,
-          active: activeCount,
-          failed: failedCount,
-        },
+        summary,
         expectedPorts,
         configHash,
       };

@@ -252,3 +252,97 @@ test("CASE A: Geo probe returns 429 rate limit -> state is active_geo_unknown an
   assert.equal(result.egressPlan[0].state, "active_geo_unknown");
   assert.equal(settings.networkSettings.activation.state, "active");
 });
+
+test("CASE B: Primary 204 endpoint fails (HTTP 502) but Fallback endpoint succeeds -> verified=true & active", async () => {
+  const tmpDir = path.join(os.tmpdir(), `mihomo-test-case-502-${Date.now()}`);
+  const manager = new MockManager();
+
+  // 模拟 verifyEgressFn：主目标 502，备用 204 成功
+  const mockVerifyEgress = async (item) => ({
+    ...item,
+    listenerOk: true,
+    proxyCoreOk: true,
+    internetOk: true,
+    geoOk: true,
+    state: "active",
+    verified: true,
+    latencyMs: 145,
+    diagnostics: {
+      internet: {
+        ok: true,
+        target: "fallback",
+        attempts: [
+          { target: "primary", httpStatus: 502, ok: false },
+          { target: "fallback", httpStatus: 204, ok: true },
+        ],
+      },
+    },
+  });
+
+  const settings = { networkSettings: { activation: { state: "inactive" } } };
+  const runtime = { egressPlan: [] };
+
+  const coordinator = new MihomoRuntimeCoordinator({
+    dataDir: tmpDir,
+    manager,
+    verifyEgressFn: mockVerifyEgress,
+    saveSettingsFn: async () => {},
+  });
+  coordinator.init({ runtime, settings });
+
+  const egressPlan = [
+    { port: 7892, proxyName: "台湾｜高速-家宽", region: "台湾" },
+  ];
+
+  const result = await coordinator.activateTransaction({ sourceText: sampleSourceYaml, egressPlan });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "active");
+  assert.equal(result.egressPlan[0].verified, true);
+  assert.equal(result.egressPlan[0].diagnostics.internet.target, "fallback");
+});
+
+test("CASE C: Both 204 endpoints fail but Geo API returns public IP -> fallback recovery succeeds", async () => {
+  const tmpDir = path.join(os.tmpdir(), `mihomo-test-case-geofallback-${Date.now()}`);
+  const manager = new MockManager();
+
+  // 模拟 verifyEgressFn：标准 204 失败，但 Geo 明确拿到出口公网 IP
+  const mockVerifyEgress = async (item) => ({
+    ...item,
+    listenerOk: true,
+    proxyCoreOk: true,
+    internetOk: true,
+    geoOk: true,
+    state: "active",
+    verified: true,
+    realGeo: { ip: "203.0.113.5", countryCode: "TW", country: "Taiwan" },
+    diagnostics: {
+      internet: {
+        ok: true,
+        recoveredBy: "geo_probe",
+        warning: "标准公网探测目标响应异常，但已通过 Geo 出口成功确认公网通达",
+      },
+    },
+  });
+
+  const settings = { networkSettings: { activation: { state: "inactive" } } };
+  const runtime = { egressPlan: [] };
+
+  const coordinator = new MihomoRuntimeCoordinator({
+    dataDir: tmpDir,
+    manager,
+    verifyEgressFn: mockVerifyEgress,
+    saveSettingsFn: async () => {},
+  });
+  coordinator.init({ runtime, settings });
+
+  const egressPlan = [
+    { port: 7892, proxyName: "台湾｜高速-家宽", region: "台湾" },
+  ];
+
+  const result = await coordinator.activateTransaction({ sourceText: sampleSourceYaml, egressPlan });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.egressPlan[0].verified, true);
+  assert.equal(result.egressPlan[0].diagnostics.internet.recoveredBy, "geo_probe");
+});

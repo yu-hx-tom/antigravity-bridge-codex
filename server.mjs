@@ -1521,10 +1521,22 @@ export async function probeMihomoProxyDelay(proxyName, { controllerPort = 19090,
   }
 }
 
-/**
- * Layer C: 探测 Listener 真实公网访问 (稳定的 204 探测)
- */
-export function probeInternetThroughListener(proxyPort, timeoutMs = 5000) {
+export const INTERNET_PROBE_TARGETS = [
+  {
+    name: "primary",
+    host: "cp.cloudflare.com",
+    path: "/generate_204",
+    expect: [204, 200],
+  },
+  {
+    name: "fallback",
+    host: "www.gstatic.com",
+    path: "/generate_204",
+    expect: [204, 200],
+  },
+];
+
+export function probeHttpThroughListener(proxyPort, target, timeoutMs = 4000) {
   return new Promise((resolve) => {
     const start = Date.now();
     let isResolved = false;
@@ -1534,47 +1546,47 @@ export function probeInternetThroughListener(proxyPort, timeoutMs = 5000) {
         resolve(val);
       }
     };
-
     const timer = setTimeout(() => {
       done({
         ok: false,
-        stage: "internet",
+        target: target.name,
         port: proxyPort,
         elapsedMs: Date.now() - start,
         httpStatus: null,
         errorType: "timeout",
-        errorMessage: `公网 204 探测超时 (${timeoutMs}ms)`,
+        errorMessage: `请求 ${target.host} 超时 (${timeoutMs}ms)`,
       });
     }, timeoutMs);
 
     const req = http.get({
       host: "127.0.0.1",
       port: proxyPort,
-      path: "http://cp.cloudflare.com/generate_204",
-      headers: { Host: "cp.cloudflare.com", "User-Agent": "Antigravity/0.4" },
+      path: `http://${target.host}${target.path}`,
+      headers: { Host: target.host, "User-Agent": "Antigravity/0.4.1" },
     }, (res) => {
       clearTimeout(timer);
       const elapsedMs = Date.now() - start;
-      const ok = res.statusCode >= 200 && res.statusCode < 400;
-      if (ok) {
+      const statusCode = res.statusCode || 0;
+      const isExpected = (target.expect || [204, 200]).includes(statusCode);
+      if (isExpected) {
         done({
           ok: true,
-          stage: "internet",
+          target: target.name,
           port: proxyPort,
           elapsedMs,
-          httpStatus: res.statusCode,
+          httpStatus: statusCode,
           errorType: null,
           errorMessage: null,
         });
       } else {
         done({
           ok: false,
-          stage: "internet",
+          target: target.name,
           port: proxyPort,
           elapsedMs,
-          httpStatus: res.statusCode,
+          httpStatus: statusCode,
           errorType: "http_error",
-          errorMessage: `公网出口响应 HTTP ${res.statusCode}`,
+          errorMessage: `目标 ${target.host} 响应 HTTP ${statusCode}`,
         });
       }
     });
@@ -1583,15 +1595,49 @@ export function probeInternetThroughListener(proxyPort, timeoutMs = 5000) {
       clearTimeout(timer);
       done({
         ok: false,
-        stage: "internet",
+        target: target.name,
         port: proxyPort,
         elapsedMs: Date.now() - start,
         httpStatus: null,
         errorType: e.code === "ECONNREFUSED" ? "connection_refused" : "proxy_error",
-        errorMessage: `公网探测连接异常: ${e.message}`,
+        errorMessage: `连接 ${target.host} 异常: ${e.message}`,
       });
     });
   });
+}
+
+/**
+ * Layer C: 探测 Listener 真实公网访问 (多目标主备策略)
+ */
+export async function probeInternetThroughListener(proxyPort, timeoutMs = 4000) {
+  const attempts = [];
+  for (const target of INTERNET_PROBE_TARGETS) {
+    const r = await probeHttpThroughListener(proxyPort, target, timeoutMs);
+    attempts.push(r);
+    if (r.ok) {
+      return {
+        ok: true,
+        stage: "internet",
+        port: proxyPort,
+        latencyMs: r.elapsedMs,
+        target: target.name,
+        httpStatus: r.httpStatus,
+        attempts,
+        errorType: null,
+        errorMessage: null,
+      };
+    }
+  }
+
+  const lastErr = attempts[attempts.length - 1];
+  return {
+    ok: false,
+    stage: "internet",
+    port: proxyPort,
+    errorType: attempts.every((a) => a.errorType === "timeout") ? "timeout" : (lastErr?.errorType || "all_probe_targets_failed"),
+    errorMessage: `公网探测目标均不可达 (${attempts.map((a) => `${a.target}:${a.httpStatus || a.errorType}`).join(", ")})`,
+    attempts,
+  };
 }
 
 /**
@@ -1713,6 +1759,128 @@ export function probeGeoThroughListener(proxyPort, timeoutMs = 6000) {
 }
 
 /**
+ * 唯一出口四层严格核验入口 verifyOneEgress (指导第 2 & 8 条)
+ */
+export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
+  const port = Number(item.port);
+  const proxyName = item.proxyName || item.name || item.proxy || "";
+  const targetRegion = item.region || "";
+
+  const regionExpectedCode = {
+    "台湾": "TW",
+    "新加坡": "SG",
+    "美国": "US",
+    "日本": "JP",
+    "韩国": "KR",
+    "英国": "GB",
+    "德国": "DE",
+    "法国": "FR",
+    "加拿大": "CA",
+    "澳大利亚": "AU",
+  };
+  const expectedCode = regionExpectedCode[targetRegion] || null;
+
+  const result = {
+    ...item,
+    port,
+    proxyName,
+    state: "failed",
+    listenerOk: false,
+    proxyCoreOk: false,
+    internetOk: false,
+    geoOk: false,
+    verified: false,
+    latencyMs: null,
+    realGeo: null,
+    diagnostics: {
+      listener: null,
+      proxyCore: null,
+      internet: null,
+      geo: null,
+    },
+    error: null,
+  };
+
+  // 1. Layer B: Listener 探测
+  const lRes = await probeListenerPort(port, 1000);
+  result.diagnostics.listener = lRes;
+  result.listenerOk = lRes.ok;
+  if (!lRes.ok) {
+    result.error = lRes.errorMessage;
+    return result;
+  }
+
+  // 2. Layer A: Proxy Core (Mihomo Controller)
+  const coreRes = await probeMihomoProxyDelay(proxyName, { controllerPort, timeoutMs: 5000 });
+  result.diagnostics.proxyCore = coreRes;
+  result.proxyCoreOk = coreRes.ok;
+  result.latencyMs = coreRes.latencyMs || null;
+  if (!coreRes.ok) {
+    result.error = coreRes.errorMessage;
+    return result;
+  }
+
+  // 3. Layer C: Internet (多目标 204 探测)
+  let netRes = await probeInternetThroughListener(port, 4000);
+  result.diagnostics.internet = netRes;
+  result.internetOk = netRes.ok;
+
+  // 4. Layer D: Geo 探测
+  const geoRes = await probeGeoThroughListener(port, 5000);
+  result.diagnostics.geo = geoRes;
+
+  // 指导第 13 条：Geo 成功兜底 Internet (如果 204 探测 502/timeout，但 Geo 明确拿到了出口公网 IP)
+  if (!result.internetOk && geoRes.ok && geoRes.ip) {
+    result.internetOk = true;
+    result.diagnostics.internet = {
+      ...netRes,
+      ok: true,
+      recoveredBy: "geo_probe",
+      warning: "标准公网探测目标响应异常，但已通过 Geo 出口成功确认公网通达",
+    };
+  }
+
+  if (!result.internetOk) {
+    result.error = result.diagnostics.internet.errorMessage || "公网不可达";
+    return result;
+  }
+
+  // 5. 判定最终出口状态与地区匹配
+  const realCode = String(geoRes.countryCode || "").toUpperCase();
+  let geoOk = true;
+  let finalState = "active";
+  let mismatchReason = "";
+
+  if (!realCode || geoRes.isRateLimited || geoRes.errorType === "geo_service_error") {
+    // Geo 限流或未知，但公网正常 -> 判定为 active_geo_unknown，出口正常可用
+    geoOk = false;
+    finalState = "active_geo_unknown";
+    mismatchReason = "出口已连通，但 Geo 服务限流或未返回明确地区代码";
+  } else if (expectedCode && realCode !== expectedCode && !item.isCustomIsp) {
+    geoOk = false;
+    finalState = "failed";
+    mismatchReason = `预期出口为 [${expectedCode}/${targetRegion}]，实测出口为 [${realCode}/${geoRes.country || "未知"}]`;
+  } else {
+    geoOk = true;
+    finalState = "active";
+  }
+
+  result.geoOk = geoOk;
+  result.state = finalState;
+  result.verified = (finalState === "active" || finalState === "active_geo_unknown");
+  result.realGeo = {
+    ip: geoRes.ip || "",
+    countryCode: realCode || "GLOBAL",
+    country: geoRes.country || (geoOk ? "" : "全球出口(待确认)"),
+    region: geoRes.region || "",
+    isp: geoRes.isp || "",
+  };
+  result.error = result.verified ? null : mismatchReason;
+
+  return result;
+}
+
+/**
  * 兼容原有接口：全链路出口探测
  */
 export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
@@ -1762,6 +1930,14 @@ export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
     error: geoRes.errorMessage,
   };
 }
+
+export const mihomoRuntime = new MihomoRuntimeCoordinator({
+  dataDir: path.join(DATA_DIR, "mihomo"),
+  manager: globalMihomoManager,
+  verifyEgressFn: verifyOneEgress,
+  saveSettingsFn: saveSettings,
+  addLogFn: addLog,
+});
 
 /**
  * 阶段 1：生成待应用计划与覆写脚本，计算 SHA-256 (不碰西游云文件，不改生效 plan)
@@ -1997,14 +2173,6 @@ export async function verifyPendingActivation() {
     message: "✓ 所有独立端口与真实出口国家已 100% 校验通过，OAuth 与多账号通道已解锁！",
   };
 }
-
-export const mihomoRuntime = new MihomoRuntimeCoordinator({
-  dataDir: path.join(DATA_DIR, "mihomo"),
-  manager: globalMihomoManager,
-  probeGeoFn: probeProxyEgressGeo,
-  saveSettingsFn: saveSettings,
-  addLogFn: addLog,
-});
 
 /**
  * 统一出口门禁验证 (P0-9 严格出口保护)
