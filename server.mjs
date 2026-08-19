@@ -1699,12 +1699,15 @@ export async function requireVerifiedEgress(proxyPort = 0, { requireListening = 
     throw new Error("[多通道安全隔离门禁] 当前处于多通道隔离模式，必须指定合法的专属独立出口端口 (7892+)，严禁直连或使用默认代理！");
   }
 
+  const activePlan = (runtime.egressPlan && runtime.egressPlan.length > 0)
+    ? runtime.egressPlan
+    : (netSettings.egressPlan || []);
+
   const activation = netSettings.activation || {};
-  if (activation.state !== "active") {
+  if ((!activePlan || activePlan.length === 0) && activation.state !== "active") {
     throw new Error(`[多通道安全隔离门禁] 多通道网络尚未完全就绪 (当前状态: ${activation.state || "inactive"})，已拦截操作。请先在网络设置中激活通道。`);
   }
 
-  const activePlan = runtime.egressPlan || netSettings.egressPlan || [];
   const matched = activePlan.find((p) => Number(p.port) === port);
   if (!matched) {
     throw new Error(`[多通道安全隔离门禁] 端口 ${port} 未在已激活的独立通道计划中登记，严禁使用非授权出口！`);
@@ -2863,12 +2866,15 @@ async function handleApi(request, response, url) {
       if (port > 0) {
         const netSettings = runtime.settings.networkSettings || {};
         const activation = netSettings.activation || {};
-        if (activation.state !== "active") {
+        const activePlan = (runtime.egressPlan && runtime.egressPlan.length > 0)
+          ? runtime.egressPlan
+          : (netSettings.egressPlan || []);
+        if ((!activePlan || activePlan.length === 0) && activation.state !== "active") {
           throw new Error("通道尚未完成出口验证 (状态非 active)，拒绝绑定账号以避免串线");
         }
-        const matchedEgress = (runtime.egressPlan || []).find((e) => Number(e.port) === port);
+        const matchedEgress = activePlan.find((e) => Number(e.port) === port);
         if (!matchedEgress) {
-          throw new Error(`代理端口 ${port} 不存在于已激活的独立通道列表中`);
+          throw new Error(`代理端口 ${port} 不存在于已登记的独立通道列表中`);
         }
         if (!await canConnect(port)) {
           throw new Error(`代理端口 ${port} 尚未监听，拒绝绑定账号以避免出口串线`);
