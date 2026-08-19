@@ -25,6 +25,8 @@ export class MihomoManager extends EventEmitter {
     this.lastError = "";
     this.intentionalStop = false;
     this.logHistory = [];
+    this.processLogs = [];
+    this.maxProcessLogs = 300;
   }
 
   addLog(msg, level = "info") {
@@ -35,6 +37,24 @@ export class MihomoManager extends EventEmitter {
     };
     this.logHistory.push(entry);
     if (this.logHistory.length > 200) this.logHistory.shift();
+  }
+
+  appendProcessLog(stream, text) {
+    const lines = String(text || "").split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      this.processLogs.push({
+        at: new Date().toISOString(),
+        stream,
+        line: line.trim(),
+      });
+    }
+    while (this.processLogs.length > this.maxProcessLogs) {
+      this.processLogs.shift();
+    }
+  }
+
+  getProcessLogs(limit = 100) {
+    return this.processLogs.slice(-limit);
   }
 
   /**
@@ -228,13 +248,25 @@ export class MihomoManager extends EventEmitter {
 
     const child = spawn(binPath, ["-d", workDir, "-f", path.resolve(configPath)], {
       detached: false,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
 
     this.process = child;
     this.pid = child.pid;
     this.startedAt = new Date().toISOString();
+
+    if (child.stdout) {
+      child.stdout.on("data", (buf) => {
+        this.appendProcessLog("stdout", buf.toString("utf8"));
+      });
+    }
+
+    if (child.stderr) {
+      child.stderr.on("data", (buf) => {
+        this.appendProcessLog("stderr", buf.toString("utf8"));
+      });
+    }
 
     child.on("exit", (code, signal) => {
       const wasIntentional = this.intentionalStop;

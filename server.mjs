@@ -62,7 +62,7 @@ const execFileAsync = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
 const CLIPROXY_LOCK_PATH = path.join(ROOT, "cliproxy.lock.json");
-const APP_VERSION = "0.4.0";
+const APP_VERSION = "0.4.1";
 const UI_HOST = "127.0.0.1";
 const UI_PORT = Number(process.env.BRIDGE_PORT || 8787);
 const DATA_DIR = path.resolve(
@@ -1135,6 +1135,10 @@ export function measureHttpProxyRealLatency(proxyPort, targetHost = "cp.cloudfla
 export async function pingNodesList(nodes = []) {
   const results = {};
   const measurements = {};
+  let successCount = 0;
+  let failedCount = 0;
+  let inactiveCount = 0;
+
   await Promise.all(
     nodes.map(async (n) => {
       const key = String(n.id || n.name || n.port || "");
@@ -1144,31 +1148,62 @@ export async function pingNodesList(nodes = []) {
       const activeEgress = findActivatedEgress(n, runtime.egressPlan);
       if (activeEgress) {
         const realChannelRtt = await measureHttpProxyRealLatency(activeEgress.port);
-        results[key] = realChannelRtt;
-        measurements[key] = { valueMs: realChannelRtt, kind: "channel", label: "通道全链路", ok: realChannelRtt > 0 };
+        const ok = realChannelRtt > 0;
+        if (ok) successCount++;
+        else failedCount++;
+
+        results[key] = ok ? realChannelRtt : null;
+        measurements[key] = {
+          valueMs: ok ? realChannelRtt : null,
+          kind: "listener",
+          label: ok ? `全链路 ${realChannelRtt}ms` : "探测超时",
+          ok,
+          active: true,
+        };
         return;
       }
 
       // 本地 Listener 端口测量的是包含中转与落地在内的真实 HTTP 全链路。
       if (n.port && !n.server) {
         const realChannelRtt = await measureHttpProxyRealLatency(n.port);
-        results[key] = realChannelRtt;
-        measurements[key] = { valueMs: realChannelRtt, kind: "channel", label: "通道全链路", ok: realChannelRtt > 0 };
+        const ok = realChannelRtt > 0;
+        if (ok) successCount++;
+        else failedCount++;
+
+        results[key] = ok ? realChannelRtt : null;
+        measurements[key] = {
+          valueMs: ok ? realChannelRtt : null,
+          kind: "listener",
+          label: ok ? `全链路 ${realChannelRtt}ms` : "探测超时",
+          ok,
+          active: true,
+        };
         return;
       }
 
-      // 未激活的订阅节点没有可独立选路的本地端口；入口 TCP 数字不再冒充节点延迟。
-      if (n.server && n.port) {
-        results[key] = 0;
-        measurements[key] = { valueMs: 0, kind: "inactive", label: "未激活，暂无全链路数据", ok: false };
-        return;
-      }
-
-      results[key] = -1;
-      measurements[key] = { valueMs: -1, kind: "unavailable", label: "不可测", ok: false };
+      // 未激活的订阅节点没有可独立选路的本地端口，不返回 0ms，返回 null 与 inactive
+      inactiveCount++;
+      results[key] = null;
+      measurements[key] = {
+        valueMs: null,
+        kind: "inactive",
+        label: "未激活",
+        ok: false,
+        active: false,
+      };
     })
   );
-  return { ok: true, latencies: results, measurements };
+
+  return {
+    ok: true,
+    latencies: results,
+    measurements,
+    summary: {
+      success: successCount,
+      failed: failedCount,
+      inactive: inactiveCount,
+    },
+  };
 }
 
 function normalizeApiBaseUrl(raw) {
@@ -1796,13 +1831,27 @@ export async function activateEmbeddedMihomoNetwork(selectedNodes = [], forceUrl
   runtime.settings.networkSettings = netSettings;
   await saveSettings();
 
+  const activeCount = res.summary?.active ?? res.egressPlan.filter((p) => p.verified).length;
+  const requestedCount = res.summary?.requested ?? res.egressPlan.length;
+  const failedCount = res.summary?.failed ?? (requestedCount - activeCount);
+  const isPartial = res.state === "partial" || failedCount > 0;
+
+  const msg = isPartial
+    ? `⚠ 内置专向独立内核已启动 (部分可用)！${activeCount}/${requestedCount} 个独立通道已验证可用，${failedCount} 个通道暂未就绪`
+    : `✓ 内置专向独立内核已启动！${activeCount}/${requestedCount} 个独立通道已全部通过出口物理验证`;
+
   return {
     ok: true,
-    state: "active",
+    state: res.state || (isPartial ? "partial" : "active"),
     generationId: res.generationId,
     egressPlan: publicEgressPlan(res.egressPlan),
+    summary: res.summary || {
+      requested: requestedCount,
+      active: activeCount,
+      failed: failedCount,
+    },
     configHash: res.configHash,
-    message: `✓ 内置专向独立内核已启动！${res.egressPlan.length}/${res.egressPlan.length} 个独立通道已全部通过出口物理验证`,
+    message: msg,
   };
 }
 
@@ -2481,7 +2530,7 @@ async function proxyState() {
   };
 }
 
-const CURRENT_VERSION = "0.4.0";
+const CURRENT_VERSION = "0.4.1";
 let cachedVersionCheck = { at: 0, result: null };
 
 async function checkAppVersion() {
@@ -2807,6 +2856,41 @@ async function handleApi(request, response, url) {
   } else if (key === "POST /api/network/activate-embedded") {
     const body = await readBody(request).catch(() => ({}));
     result = await activateEmbeddedMihomoNetwork(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
+  } else if (key === "GET /api/network/status") {
+    const netSettings = runtime.settings?.networkSettings || {};
+    const plan = runtime.egressPlan || netSettings.egressPlan || [];
+    const activeCount = plan.filter((p) => p.verified === true || p.state === "active").length;
+    const failedCount = plan.filter((p) => p.verified === false || p.state === "failed").length;
+    result = {
+      ok: true,
+      activation: netSettings.activation || { state: "inactive" },
+      mihomo: {
+        ...globalMihomoManager.getStatus(),
+        controllerAlive: await globalMihomoManager.canConnect(19090, 400).catch(() => false),
+      },
+      egressPlan: publicEgressPlan(plan),
+      summary: {
+        requested: plan.length,
+        active: activeCount,
+        failed: failedCount,
+      },
+      lastActivationAttempt: runtime.lastActivationAttempt || null,
+    };
+  } else if (key === "GET /api/network/diagnostics") {
+    const netSettings = runtime.settings?.networkSettings || {};
+    const plan = runtime.egressPlan || netSettings.egressPlan || [];
+    result = {
+      ok: true,
+      activation: netSettings.activation || { state: "inactive" },
+      egressPlan: publicEgressPlan(plan),
+      mihomo: {
+        ...globalMihomoManager.getStatus(),
+        controllerAlive: await globalMihomoManager.canConnect(19090, 400).catch(() => false),
+      },
+      processLogs: globalMihomoManager.getProcessLogs(150),
+      lastActivationAttempt: runtime.lastActivationAttempt || null,
+      logs: runtime.logs.filter((l) => l.scope === "network" || l.scope === "mihomo").slice(-80),
+    };
   } else if (key === "GET /api/mihomo/status") {
     result = globalMihomoManager.getStatus();
   } else if (key === "POST /api/mihomo/stop") {
