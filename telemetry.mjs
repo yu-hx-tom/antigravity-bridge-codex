@@ -162,10 +162,11 @@ export class TelemetryCollector {
     const genSeconds = req.generationMs / 1000;
     const durSeconds = req.totalDurationMs / 1000;
 
-    if (genSeconds > 0 && req.outputTokens > 0) {
-      req.tokensPerSec = Math.round((req.outputTokens / genSeconds) * 10) / 10;
-    } else if (durSeconds > 0 && req.outputTokens > 0) {
-      req.tokensPerSec = Math.round((req.outputTokens / durSeconds) * 10) / 10;
+    // 平滑保护：若生成区间极短 (< 0.08s，通常为整段瞬时到达)，以整体请求耗时 durSeconds 作为分母，避免瞬时微小除法产生 1000+ 的离谱虚高
+    const effectiveSeconds = genSeconds >= 0.08 ? genSeconds : (durSeconds > 0 ? durSeconds : 0.1);
+
+    if (effectiveSeconds > 0 && req.outputTokens > 0) {
+      req.tokensPerSec = Math.round((req.outputTokens / effectiveSeconds) * 10) / 10;
     } else {
       req.tokensPerSec = null;
     }

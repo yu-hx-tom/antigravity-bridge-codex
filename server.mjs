@@ -1853,11 +1853,12 @@ async function getAvailableProxyNodes() {
     ];
   }
 
-  // 模式 2：高级多出口隔离模式（仅返回已完成 verify 的 active 计划）
-  const isActive = netSettings.activation?.state === "active";
-  const result = (isActive && runtime.egressPlan && runtime.egressPlan.length > 0)
-    ? publicEgressPlan(runtime.egressPlan)
-    : [];
+  // 模式 2：高级多出口隔离模式 (历史配置与已就绪节点一律列出供用户自由选择)
+  const currentPlan = (runtime.egressPlan && runtime.egressPlan.length > 0)
+    ? runtime.egressPlan
+    : (netSettings.egressPlan || []);
+
+  const result = currentPlan.length > 0 ? publicEgressPlan(currentPlan) : [];
 
   result.push({
     id: "default",
