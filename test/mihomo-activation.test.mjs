@@ -217,3 +217,38 @@ test("CASE 6: Candidate start fails -> restores previous stable active", async (
   assert.equal(settings.networkSettings.activation.state, "active");
   assert.equal(settings.networkSettings.activation.generationId, "gen_stable");
 });
+
+test("CASE A: Geo probe returns 429 rate limit -> state is active_geo_unknown and candidate IS promoted", async () => {
+  const tmpDir = path.join(os.tmpdir(), `mihomo-test-case-geo429-${Date.now()}`);
+  const manager = new MockManager();
+  const mockProbe = async (port) => ({
+    ok: false,
+    stage: "geo_unknown",
+    isRateLimited: true,
+    countryCode: "GLOBAL",
+    country: "全球节点 (Geo限流待确认)",
+    error: "Geo 查询服务触发频次限制 (HTTP 429)",
+  });
+
+  const settings = { networkSettings: { activation: { state: "inactive" } } };
+  const runtime = { egressPlan: [] };
+
+  const coordinator = new MihomoRuntimeCoordinator({
+    dataDir: tmpDir,
+    manager,
+    probeGeoFn: mockProbe,
+    saveSettingsFn: async () => {},
+  });
+  coordinator.init({ runtime, settings });
+
+  const egressPlan = [
+    { port: 7892, proxyName: "台湾｜高速-家宽", region: "台湾" },
+  ];
+
+  const result = await coordinator.activateTransaction({ sourceText: sampleSourceYaml, egressPlan });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.egressPlan[0].verified, true);
+  assert.equal(result.egressPlan[0].state, "active_geo_unknown");
+  assert.equal(settings.networkSettings.activation.state, "active");
+});

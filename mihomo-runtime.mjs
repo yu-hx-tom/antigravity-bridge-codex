@@ -82,9 +82,13 @@ export class MihomoRuntimeCoordinator {
   }
 
   /**
-   * 严密比对并核验所有出口通道 (分层探测：Listener -> Internet -> Geo)
+   * 单出口四层严格核验：Listener -> Proxy Core -> Internet -> Geo
    */
-  async verifyEgressPlan(egressPlan) {
+  async verifyOneEgress(item, { controllerPort = 19090, secret = "" } = {}) {
+    const port = Number(item.port);
+    const proxyName = item.proxyName || item.proxy || "";
+    const targetRegion = item.region || "";
+
     const regionExpectedCode = {
       "台湾": "TW",
       "新加坡": "SG",
@@ -97,103 +101,187 @@ export class MihomoRuntimeCoordinator {
       "加拿大": "CA",
       "澳大利亚": "AU",
     };
+    const expectedCode = regionExpectedCode[targetRegion] || null;
 
+    const result = {
+      ...item,
+      state: "failed",
+      listenerOk: false,
+      proxyCoreOk: false,
+      internetOk: false,
+      geoOk: false,
+      verified: false,
+      latencyMs: null,
+      realGeo: null,
+      diagnostics: {
+        listener: null,
+        proxyCore: null,
+        internet: null,
+        geo: null,
+      },
+      error: null,
+    };
+
+    // Layer 1: Listener 本地端口探测
+    const listenerStart = Date.now();
+    const isListening = this.manager?.canConnect ? await this.manager.canConnect(port, 1000) : true;
+    result.listenerOk = isListening;
+    result.diagnostics.listener = {
+      ok: isListening,
+      stage: "listener",
+      port,
+      elapsedMs: Date.now() - listenerStart,
+      errorType: isListening ? null : "listener_missing",
+      errorMessage: isListening ? null : `本地 Listener 端口 ${port} 未监听`,
+    };
+
+    if (!isListening) {
+      result.error = `Listener 未监听 (端口 ${port})`;
+      this.log(`[mihomo] 端口 ${port} (${proxyName}) Listener 本地未监听`, "warn");
+      return result;
+    }
+
+    // Layer 2: Proxy Core 节点本体探测 (通过 Controller)
+    let proxyCoreOk = true;
+    let proxyLatency = null;
+    if (this.manager?.requestController && proxyName) {
+      try {
+        const targetUrl = encodeURIComponent("http://cp.cloudflare.com/generate_204");
+        const pathName = `/proxies/${encodeURIComponent(proxyName)}/delay?timeout=5000&url=${targetUrl}`;
+        const ctrlRes = await this.manager.requestController(pathName, { timeoutMs: 6000 });
+        if (ctrlRes && ctrlRes.ok) {
+          proxyCoreOk = true;
+          proxyLatency = ctrlRes.raw?.delay || 0;
+          result.diagnostics.proxyCore = {
+            ok: true,
+            stage: "proxy_core",
+            latencyMs: proxyLatency,
+            errorType: null,
+            errorMessage: null,
+          };
+        } else {
+          proxyCoreOk = false;
+          const msg = ctrlRes?.raw?.message || (ctrlRes ? `HTTP ${ctrlRes.status}` : "timeout");
+          result.diagnostics.proxyCore = {
+            ok: false,
+            stage: "proxy_core",
+            errorType: msg.includes("timeout") ? "timeout" : "proxy_error",
+            errorMessage: `节点本体连通失败: ${msg}`,
+          };
+        }
+      } catch (e) {
+        proxyCoreOk = false;
+        result.diagnostics.proxyCore = {
+          ok: false,
+          stage: "proxy_core",
+          errorType: "controller_error",
+          errorMessage: e.message,
+        };
+      }
+    } else {
+      // 未配置 manager 或无 controller
+      result.diagnostics.proxyCore = { ok: true, stage: "proxy_core", latencyMs: null, errorType: null };
+    }
+    result.proxyCoreOk = proxyCoreOk;
+    result.latencyMs = proxyLatency;
+
+    // Layer 3: Internet 真实公网访问探测 (204 探测)
+    let probeResult = { ok: false, error: "probeFn not configured" };
+    if (this.probeGeoFn) {
+      probeResult = await this.probeGeoFn(port, 5000);
+      if (!probeResult.ok) {
+        await new Promise((r) => setTimeout(r, 400));
+        probeResult = await this.probeGeoFn(port, 5000);
+      }
+    }
+
+    result.diagnostics.internet = {
+      ok: Boolean(probeResult.ok || probeResult.stage === "geo_unknown"),
+      stage: "internet",
+      errorType: probeResult.errorType || (probeResult.ok ? null : "internet_failed"),
+      errorMessage: probeResult.error || null,
+    };
+    result.internetOk = result.diagnostics.internet.ok;
+
+    if (!result.internetOk) {
+      result.error = `公网不可达: ${probeResult.error || "探测超时"}`;
+      this.log(`[mihomo] 端口 ${port} (${proxyName}) 公网访问失败: ${result.error}`, "warn");
+      return result;
+    }
+
+    // Layer 4: Geo 出口国家代码匹配
+    const realCode = String(probeResult.countryCode || "").toUpperCase();
+    let geoOk = true;
+    let geoState = "active";
+    let mismatchReason = "";
+
+    if (!realCode || probeResult.stage === "geo_unknown" || probeResult.isRateLimited) {
+      // Geo 服务限流或未返回明确国家代码，但公网连通正常 -> 标记 active_geo_unknown，保留通道可用
+      geoOk = false;
+      geoState = "active_geo_unknown";
+      mismatchReason = "出口已连通，但 Geo 服务限流或未返回明确地区代码";
+      result.diagnostics.geo = {
+        ok: false,
+        stage: "geo",
+        errorType: "geo_service_error",
+        errorMessage: mismatchReason,
+        warning: true,
+      };
+      this.log(`[mihomo] 端口 ${port} 出口连通但 Geo 限流/待确认`, "warn");
+    } else if (expectedCode && realCode !== expectedCode && !item.isCustomIsp) {
+      // 明确预期地区但物理实测不匹配
+      geoOk = false;
+      geoState = "failed";
+      mismatchReason = `预期出口为 [${expectedCode}/${targetRegion}]，实测出口为 [${realCode}/${probeResult.country || "未知"}]`;
+      result.diagnostics.geo = {
+        ok: false,
+        stage: "geo",
+        errorType: "geo_mismatch",
+        errorMessage: mismatchReason,
+      };
+      this.log(`[mihomo] 端口 ${port} Geo 校验不符: ${mismatchReason}`, "warn");
+    } else {
+      result.diagnostics.geo = {
+        ok: true,
+        stage: "geo",
+        countryCode: realCode,
+        country: probeResult.country,
+        errorType: null,
+        errorMessage: null,
+      };
+    }
+
+    result.geoOk = geoOk;
+    result.state = geoState;
+    result.verified = (geoState === "active" || geoState === "active_geo_unknown");
+    result.realGeo = {
+      ip: probeResult.ip || "",
+      countryCode: realCode || "GLOBAL",
+      country: probeResult.country || (geoOk ? "" : "全球出口(待确认)"),
+      region: probeResult.region || "",
+      isp: probeResult.isp || "",
+    };
+    result.error = result.verified ? null : mismatchReason;
+
+    if (result.verified) {
+      this.log(`[mihomo] ✓ 端口 ${port} (${proxyName}) 出口验证通过 [状态: ${geoState}, 实际出口: ${realCode || "GLOBAL"}]`);
+    }
+
+    return result;
+  }
+
+  /**
+   * 严密比对并核验所有出口通道 (四层分层探测)
+   */
+  async verifyEgressPlan(egressPlan, options = {}) {
     const verifiedPlan = [];
     const failedDetails = [];
 
     for (const item of egressPlan) {
-      const port = Number(item.port);
-      const targetRegion = item.region || "";
-      const expectedCode = regionExpectedCode[targetRegion] || null;
-
-      // Layer 1: Listener TCP 端口连通性
-      const listenerOk = this.manager?.canConnect ? await this.manager.canConnect(port, 500) : true;
-      if (!listenerOk) {
-        const errMsg = `端口 ${port} (${item.proxyName || item.proxy}) Listener 本地无响应`;
-        failedDetails.push(errMsg);
-        this.log(`[mihomo] 端口 ${port} Listener 未监听`, "warn");
-        verifiedPlan.push({
-          ...item,
-          state: "failed",
-          listenerOk: false,
-          internetOk: false,
-          geoOk: false,
-          verified: false,
-          realGeo: null,
-          error: errMsg,
-        });
-        continue;
-      }
-
-      // Layer 2: Internet 公网端到端连通性与 Layer 3: Geo 探测
-      let probeResult = { ok: false, error: "probeFn not configured" };
-      if (this.probeGeoFn) {
-        probeResult = await this.probeGeoFn(port, 5000);
-        if (!probeResult.ok) {
-          await new Promise((r) => setTimeout(r, 600));
-          probeResult = await this.probeGeoFn(port, 5000);
-        }
-      }
-
-      if (!probeResult.ok) {
-        const errMsg = `端口 ${port} (${item.proxyName || item.proxy}) 公网出口不可达: ${probeResult.error}`;
-        failedDetails.push(errMsg);
-        this.log(`[mihomo] 端口 ${port} 出口探测失败: ${probeResult.error}`, "warn");
-        verifiedPlan.push({
-          ...item,
-          state: "failed",
-          listenerOk: true,
-          internetOk: false,
-          geoOk: false,
-          verified: false,
-          realGeo: null,
-          error: errMsg,
-        });
-        continue;
-      }
-
-      // Layer 3: Geo 出口代码匹配
-      const realCode = String(probeResult.countryCode || "").toUpperCase();
-      let geoOk = true;
-      let state = "active";
-      let mismatchReason = "";
-
-      if (!realCode) {
-        // Geo 服务未返回国家代码，但公网已通达 -> 降级为 geo_unknown
-        geoOk = false;
-        state = "geo_unknown";
-        mismatchReason = "出口已连通，但 Geo 查询服务未返回明确地区代码";
-        this.log(`[mihomo] 端口 ${port} 出口连通但 Geo 未知`, "warn");
-      } else if (expectedCode && realCode !== expectedCode && !item.isCustomIsp) {
-        // 明确指定预期地区但实测不符
-        geoOk = false;
-        state = "geo_mismatch";
-        mismatchReason = `预期出口为 [${expectedCode}/${targetRegion}]，实测为 [${realCode}/${probeResult.country || "未知"}]`;
-        failedDetails.push(`端口 ${port} ${mismatchReason}`);
-        this.log(`[mihomo] 端口 ${port} Geo 校验不符: ${mismatchReason}`, "warn");
-      }
-
-      const isVerified = (state === "active" || state === "geo_unknown");
-
-      verifiedPlan.push({
-        ...item,
-        state: isVerified ? "active" : "failed",
-        listenerOk: true,
-        internetOk: true,
-        geoOk,
-        verified: isVerified,
-        realGeo: {
-          ip: probeResult.ip,
-          countryCode: realCode,
-          country: probeResult.country,
-          region: probeResult.region,
-          isp: probeResult.isp,
-        },
-        error: isVerified ? null : mismatchReason,
-      });
-
-      if (isVerified) {
-        this.log(`[mihomo] 端口 ${port} 出口验证通过 (实际出口: ${realCode || "GLOBAL"} - ${probeResult.ip || ""})`);
+      const res = await this.verifyOneEgress(item, options);
+      verifiedPlan.push(res);
+      if (!res.verified && res.error) {
+        failedDetails.push(`端口 ${res.port} (${res.proxyName || res.proxy}): ${res.error}`);
       }
     }
 

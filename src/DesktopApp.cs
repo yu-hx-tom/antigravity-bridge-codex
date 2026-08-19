@@ -4331,7 +4331,7 @@ namespace AntigravityDesktopClient
                 }
                 else
                 {
-                    latText = "未激活";
+                    latText = "待激活后测速";
                     latCol = ColTextMuted;
                 }
                 
@@ -4974,10 +4974,15 @@ namespace AntigravityDesktopClient
                 int lat = egressLatencies.ContainsKey(egressId) ? egressLatencies[egressId] : (egressLatencies.ContainsKey(port) ? egressLatencies[port] : 0);
                 string latencyLabel = egressLatencyLabels.ContainsKey(egressId) ? egressLatencyLabels[egressId] : (egressLatencyLabels.ContainsKey(port) ? egressLatencyLabels[port] : "通道全链路");
 
+                string itemState = item.ContainsKey("state") ? item["state"].ToString() : (currentActivationState == "active" ? "active" : "inactive");
+                bool isVerified = item.ContainsKey("verified") ? Convert.ToBoolean(item["verified"]) : (itemState == "active" || itemState == "active_geo_unknown");
+
                 System.Windows.Media.Color cardBorderCol = ColBorder;
-                if (currentActivationState == "prepared" || currentActivationState == "waiting_restart") cardBorderCol = ColAmber;
+                if (itemState == "active") cardBorderCol = ColGreen;
+                else if (itemState == "active_geo_unknown") cardBorderCol = ColAmber;
+                else if (itemState == "failed") cardBorderCol = ColRed;
                 else if (currentActivationState == "active") cardBorderCol = ColGreen;
-                else if (currentActivationState == "failed") cardBorderCol = ColRed;
+                else if (currentActivationState == "partial") cardBorderCol = isVerified ? ColGreen : ColAmber;
 
                 Border card = new Border
                 {
@@ -5038,6 +5043,64 @@ namespace AntigravityDesktopClient
                     Margin = new Thickness(0, 6, 0, 0)
                 };
                 cardSp.Children.Add(tbSub);
+
+                // Layer A~D 诊断指示条
+                var diag = item.ContainsKey("diagnostics") ? item["diagnostics"] as Dictionary<string, object> : null;
+                if (diag != null || item.ContainsKey("state"))
+                {
+                    WrapPanel diagPanel = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+
+                    // 1. 节点本体
+                    bool coreOk = item.ContainsKey("proxyCoreOk") ? Convert.ToBoolean(item["proxyCoreOk"]) : true;
+                    Border bCore = new Border
+                    {
+                        Background = new SolidColorBrush(coreOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
+                        CornerRadius = new CornerRadius(3),
+                        Padding = new Thickness(4, 1, 4, 1),
+                        Margin = new Thickness(0, 0, 4, 2)
+                    };
+                    bCore.Child = new TextBlock { Text = coreOk ? "本体 ✓" : "本体 ✗", FontSize = 9, Foreground = new SolidColorBrush(coreOk ? ColGreen : ColRed) };
+                    diagPanel.Children.Add(bCore);
+
+                    // 2. Listener
+                    bool listOk = item.ContainsKey("listenerOk") ? Convert.ToBoolean(item["listenerOk"]) : true;
+                    Border bList = new Border
+                    {
+                        Background = new SolidColorBrush(listOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
+                        CornerRadius = new CornerRadius(3),
+                        Padding = new Thickness(4, 1, 4, 1),
+                        Margin = new Thickness(0, 0, 4, 2)
+                    };
+                    bList.Child = new TextBlock { Text = listOk ? "端口 ✓" : "端口 ✗", FontSize = 9, Foreground = new SolidColorBrush(listOk ? ColGreen : ColRed) };
+                    diagPanel.Children.Add(bList);
+
+                    // 3. 公网
+                    bool netOk = item.ContainsKey("internetOk") ? Convert.ToBoolean(item["internetOk"]) : true;
+                    Border bNet = new Border
+                    {
+                        Background = new SolidColorBrush(netOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68)),
+                        CornerRadius = new CornerRadius(3),
+                        Padding = new Thickness(4, 1, 4, 1),
+                        Margin = new Thickness(0, 0, 4, 2)
+                    };
+                    bNet.Child = new TextBlock { Text = netOk ? "公网 ✓" : "公网 ✗", FontSize = 9, Foreground = new SolidColorBrush(netOk ? ColGreen : ColRed) };
+                    diagPanel.Children.Add(bNet);
+
+                    // 4. Geo
+                    bool gOk = item.ContainsKey("geoOk") ? Convert.ToBoolean(item["geoOk"]) : false;
+                    string geoLabel = gOk ? (country + " ✓") : (netOk ? "地区待确认" : "地区 ✗");
+                    Border bGeo = new Border
+                    {
+                        Background = new SolidColorBrush(gOk ? System.Windows.Media.Color.FromArgb(20, 34, 197, 94) : (netOk ? System.Windows.Media.Color.FromArgb(20, 245, 158, 11) : System.Windows.Media.Color.FromArgb(20, 239, 68, 68))),
+                        CornerRadius = new CornerRadius(3),
+                        Padding = new Thickness(4, 1, 4, 1),
+                        Margin = new Thickness(0, 0, 4, 2)
+                    };
+                    bGeo.Child = new TextBlock { Text = geoLabel, FontSize = 9, Foreground = new SolidColorBrush(gOk ? ColGreen : (netOk ? ColAmber : ColRed)) };
+                    diagPanel.Children.Add(bGeo);
+
+                    cardSp.Children.Add(diagPanel);
+                }
 
                 card.Child = cardSp;
                 Grid.SetRow(card, i / 2);

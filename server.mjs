@@ -1360,6 +1360,15 @@ async function fetchSubscriptionCandidateNodes(forceUrl = null, forceCustomIsp =
     try {
       const fetched = await fetchFirstValidSubscription([url]);
       parsedNodes = fetched.parsedNodes;
+      if (fetched.text) {
+        runtime.sourceSnapshot = {
+          id: `snap_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+          sourceText: fetched.text,
+          sourceHash: crypto.createHash("sha256").update(fetched.text, "utf8").digest("hex"),
+          createdAt: new Date().toISOString(),
+          parsedNodes,
+        };
+      }
       addLog("network", `成功拉取订阅，解析到 ${parsedNodes.length} 个原始节点`);
     } catch (e) {
       fetchError = e.message;
@@ -1373,6 +1382,16 @@ async function fetchSubscriptionCandidateNodes(forceUrl = null, forceCustomIsp =
       const localSession = await loadLocalSessionNodes();
       if (localSession.parsedNodes.length > 0) {
         parsedNodes = localSession.parsedNodes;
+        const localRaw = findLocalRawProfileContent();
+        if (localRaw) {
+          runtime.sourceSnapshot = {
+            id: `snap_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+            sourceText: localRaw,
+            sourceHash: crypto.createHash("sha256").update(localRaw, "utf8").digest("hex"),
+            createdAt: new Date().toISOString(),
+            parsedNodes,
+          };
+        }
         addLog("network", `已从本地 Clash/Follow 客户端配置文件中成功载入 ${parsedNodes.length} 个节点`);
       }
     } catch (e) {
@@ -1432,8 +1451,82 @@ export async function isXiyouCoreRunning() {
   }
 }
 
-export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
+export function makeBodyPreview(body, max = 300) {
+  if (body == null) return null;
+  const text = String(body).replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.slice(0, max);
+}
+
+/**
+ * Layer B: 探测本地 Listener 端口 TCP 连通性
+ */
+export async function probeListenerPort(port, timeoutMs = 2000) {
+  const start = Date.now();
+  try {
+    const isListening = await globalMihomoManager.canConnect(port, timeoutMs);
+    const elapsedMs = Date.now() - start;
+    if (isListening) {
+      return { ok: true, stage: "listener", port, elapsedMs, errorType: null, errorMessage: null };
+    }
+    return { ok: false, stage: "listener", port, elapsedMs, errorType: "listener_missing", errorMessage: `本地端口 ${port} 未正常监听` };
+  } catch (e) {
+    return { ok: false, stage: "listener", port, elapsedMs: Date.now() - start, errorType: "connection_refused", errorMessage: e.message };
+  }
+}
+
+/**
+ * Layer A: 调用 Mihomo Controller 探测节点本体延迟
+ */
+export async function probeMihomoProxyDelay(proxyName, { controllerPort = 19090, secret = "", timeoutMs = 5000 } = {}) {
+  const start = Date.now();
+  if (!proxyName) {
+    return { ok: false, stage: "proxy_core", elapsedMs: 0, errorType: "proxy_not_found", errorMessage: "缺少节点代理名称" };
+  }
+
+  try {
+    const targetUrl = encodeURIComponent("http://cp.cloudflare.com/generate_204");
+    const pathName = `/proxies/${encodeURIComponent(proxyName)}/delay?timeout=${timeoutMs}&url=${targetUrl}`;
+    const res = await globalMihomoManager.requestController(pathName, { timeoutMs: timeoutMs + 1000 });
+    const elapsedMs = Date.now() - start;
+
+    if (res && res.ok) {
+      const delay = res.raw?.delay || elapsedMs;
+      return { ok: true, stage: "proxy_core", proxyName, latencyMs: delay, elapsedMs, errorType: null, errorMessage: null };
+    }
+
+    const rawMsg = res?.raw?.message || res?.raw?.error || (res ? `HTTP ${res.status}` : "controller error");
+    let errorType = "timeout";
+    if (rawMsg.includes("handshake")) errorType = "tls_error";
+    else if (rawMsg.includes("refused")) errorType = "connection_refused";
+    else if (rawMsg.includes("not found")) errorType = "proxy_not_found";
+
+    return {
+      ok: false,
+      stage: "proxy_core",
+      proxyName,
+      elapsedMs,
+      errorType,
+      errorMessage: `节点本体连通失败: ${rawMsg}`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      stage: "proxy_core",
+      proxyName,
+      elapsedMs: Date.now() - start,
+      errorType: e.message.includes("timeout") ? "timeout" : "controller_error",
+      errorMessage: `Mihomo 节点探测异常: ${e.message}`,
+    };
+  }
+}
+
+/**
+ * Layer C: 探测 Listener 真实公网访问 (稳定的 204 探测)
+ */
+export function probeInternetThroughListener(proxyPort, timeoutMs = 5000) {
   return new Promise((resolve) => {
+    const start = Date.now();
     let isResolved = false;
     const done = (val) => {
       if (!isResolved) {
@@ -1441,7 +1534,91 @@ export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
         resolve(val);
       }
     };
-    setTimeout(() => done({ ok: false, error: "timeout" }), timeoutMs);
+
+    const timer = setTimeout(() => {
+      done({
+        ok: false,
+        stage: "internet",
+        port: proxyPort,
+        elapsedMs: Date.now() - start,
+        httpStatus: null,
+        errorType: "timeout",
+        errorMessage: `公网 204 探测超时 (${timeoutMs}ms)`,
+      });
+    }, timeoutMs);
+
+    const req = http.get({
+      host: "127.0.0.1",
+      port: proxyPort,
+      path: "http://cp.cloudflare.com/generate_204",
+      headers: { Host: "cp.cloudflare.com", "User-Agent": "Antigravity/0.4" },
+    }, (res) => {
+      clearTimeout(timer);
+      const elapsedMs = Date.now() - start;
+      const ok = res.statusCode >= 200 && res.statusCode < 400;
+      if (ok) {
+        done({
+          ok: true,
+          stage: "internet",
+          port: proxyPort,
+          elapsedMs,
+          httpStatus: res.statusCode,
+          errorType: null,
+          errorMessage: null,
+        });
+      } else {
+        done({
+          ok: false,
+          stage: "internet",
+          port: proxyPort,
+          elapsedMs,
+          httpStatus: res.statusCode,
+          errorType: "http_error",
+          errorMessage: `公网出口响应 HTTP ${res.statusCode}`,
+        });
+      }
+    });
+
+    req.on("error", (e) => {
+      clearTimeout(timer);
+      done({
+        ok: false,
+        stage: "internet",
+        port: proxyPort,
+        elapsedMs: Date.now() - start,
+        httpStatus: null,
+        errorType: e.code === "ECONNREFUSED" ? "connection_refused" : "proxy_error",
+        errorMessage: `公网探测连接异常: ${e.message}`,
+      });
+    });
+  });
+}
+
+/**
+ * Layer D: 探测出口 IP / Geo 国家地区 (带双源与 429 容灾)
+ */
+export function probeGeoThroughListener(proxyPort, timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let isResolved = false;
+    const done = (val) => {
+      if (!isResolved) {
+        isResolved = true;
+        resolve(val);
+      }
+    };
+
+    const timer = setTimeout(() => {
+      done({
+        ok: false,
+        stage: "geo",
+        port: proxyPort,
+        elapsedMs: Date.now() - start,
+        httpStatus: null,
+        errorType: "timeout",
+        errorMessage: `Geo 出口探测超时 (${timeoutMs}ms)`,
+      });
+    }, timeoutMs);
 
     const req = http.get({
       host: "127.0.0.1",
@@ -1452,25 +1629,138 @@ export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
       let data = "";
       res.on("data", (chunk) => data += chunk);
       res.on("end", () => {
+        clearTimeout(timer);
+        const elapsedMs = Date.now() - start;
+        const statusCode = res.statusCode || 200;
+
+        if (statusCode === 429) {
+          // HTTP 429 限流：明确归类为 geo_service_error，绝不当作代理故障
+          done({
+            ok: false,
+            stage: "geo",
+            port: proxyPort,
+            elapsedMs,
+            httpStatus: 429,
+            bodyPreview: makeBodyPreview(data),
+            errorType: "geo_service_error",
+            errorMessage: "Geo 查询服务触发频次限制 (HTTP 429)，出口公网已连通",
+            isRateLimited: true,
+          });
+          return;
+        }
+
+        if (statusCode >= 400) {
+          done({
+            ok: false,
+            stage: "geo",
+            port: proxyPort,
+            elapsedMs,
+            httpStatus: statusCode,
+            bodyPreview: makeBodyPreview(data),
+            errorType: "http_error",
+            errorMessage: `Geo 服务响应 HTTP ${statusCode}`,
+          });
+          return;
+        }
+
         try {
           const json = JSON.parse(data);
           if (json.status === "success" || json.countryCode) {
             done({
               ok: true,
+              stage: "geo",
+              port: proxyPort,
+              elapsedMs,
+              httpStatus: 200,
               ip: json.query || json.ip || "",
               countryCode: String(json.countryCode || "").toUpperCase(),
               country: json.country || "",
               region: json.regionName || json.region || "",
               isp: json.isp || "",
+              errorType: null,
+              errorMessage: null,
             });
             return;
           }
         } catch {}
-        done({ ok: false, error: "invalid response" });
+
+        done({
+          ok: false,
+          stage: "geo",
+          port: proxyPort,
+          elapsedMs,
+          httpStatus: statusCode,
+          bodyPreview: makeBodyPreview(data),
+          errorType: "non_json_response",
+          errorMessage: `Geo 服务返回非预期响应: ${makeBodyPreview(data, 100)}`,
+        });
       });
     });
-    req.on("error", (e) => done({ ok: false, error: e.message }));
+
+    req.on("error", (e) => {
+      clearTimeout(timer);
+      done({
+        ok: false,
+        stage: "geo",
+        port: proxyPort,
+        elapsedMs: Date.now() - start,
+        httpStatus: null,
+        errorType: "connection_error",
+        errorMessage: `Geo 探测连接错误: ${e.message}`,
+      });
+    });
   });
+}
+
+/**
+ * 兼容原有接口：全链路出口探测
+ */
+export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
+  // 先执行 Layer C 验证 Internet
+  const netRes = await probeInternetThroughListener(proxyPort, Math.min(timeoutMs, 4000));
+  if (!netRes.ok) {
+    return {
+      ok: false,
+      stage: "internet",
+      errorType: netRes.errorType,
+      error: netRes.errorMessage,
+    };
+  }
+
+  // 再执行 Layer D 获取 Geo
+  const geoRes = await probeGeoThroughListener(proxyPort, timeoutMs);
+  if (geoRes.ok) {
+    return {
+      ok: true,
+      stage: "geo",
+      ip: geoRes.ip,
+      countryCode: geoRes.countryCode,
+      country: geoRes.country,
+      region: geoRes.region,
+      isp: geoRes.isp,
+    };
+  }
+
+  // 如果公网可用但 Geo 触发 429 或限流，返回 geo_unknown 而不报错
+  if (geoRes.isRateLimited || geoRes.errorType === "geo_service_error") {
+    return {
+      ok: true,
+      stage: "geo_unknown",
+      ip: "",
+      countryCode: "GLOBAL",
+      country: "全球节点 (Geo限流待确认)",
+      region: "",
+      isp: "",
+      warning: geoRes.errorMessage,
+    };
+  }
+
+  return {
+    ok: false,
+    stage: "geo",
+    errorType: geoRes.errorType,
+    error: geoRes.errorMessage,
+  };
 }
 
 /**
@@ -1799,9 +2089,9 @@ export async function activateEmbeddedMihomoNetwork(selectedNodes = [], forceUrl
     previousPlan,
   });
 
-  // 1. 获取 Source of Truth (完整供应商配置底版)
-  let sourceText = "";
-  if (netSettings.subscriptionUrl) {
+  // 1. 获取 Source of Truth (完整供应商配置底版，优先从已解析快照中读取)
+  let sourceText = runtime.sourceSnapshot?.sourceText || "";
+  if (!sourceText && netSettings.subscriptionUrl) {
     try {
       sourceText = await fetchSubscriptionRawText(netSettings.subscriptionUrl);
     } catch {}
@@ -1811,6 +2101,30 @@ export async function activateEmbeddedMihomoNetwork(selectedNodes = [], forceUrl
   }
   if (!sourceText) {
     throw new Error("无法获取完整的源订阅配置 (Source of Truth)，请先输入有效订阅链接或扫描本地配置文件");
+  }
+
+  // 写入或刷新当前源快照
+  if (!runtime.sourceSnapshot || runtime.sourceSnapshot.sourceText !== sourceText) {
+    runtime.sourceSnapshot = {
+      id: `snap_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+      sourceText,
+      sourceHash: crypto.createHash("sha256").update(sourceText, "utf8").digest("hex"),
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  // 端口占用预检：防止与其他系统服务或僵尸进程冲突
+  const portsToCheck = [...egressPlan.map((p) => Number(p.port)), 19090];
+  const occupiedPorts = [];
+  for (const p of portsToCheck) {
+    const isOccupied = await globalMihomoManager.canConnect(p, 250);
+    // 如果没有正在运行的内部 manager 实例，但端口已通，说明被外部进程占用
+    if (isOccupied && !globalMihomoManager.process) {
+      occupiedPorts.push(p);
+    }
+  }
+  if (occupiedPorts.length > 0) {
+    throw new Error(`端口冲突预检未通过：端口 [${occupiedPorts.join(", ")}] 已被其他外部程序占用，请先关闭冲突程序！`);
   }
 
   mihomoRuntime.init({ runtime, settings: runtime.settings });
@@ -2887,9 +3201,14 @@ async function handleApi(request, response, url) {
         ...globalMihomoManager.getStatus(),
         controllerAlive: await globalMihomoManager.canConnect(19090, 400).catch(() => false),
       },
-      processLogs: globalMihomoManager.getProcessLogs(150),
+      sourceSnapshot: runtime.sourceSnapshot ? {
+        id: runtime.sourceSnapshot.id,
+        hash: runtime.sourceSnapshot.sourceHash,
+        createdAt: runtime.sourceSnapshot.createdAt,
+      } : null,
+      processLogs: globalMihomoManager.getProcessLogs(300),
       lastActivationAttempt: runtime.lastActivationAttempt || null,
-      logs: runtime.logs.filter((l) => l.scope === "network" || l.scope === "mihomo").slice(-80),
+      logs: runtime.logs.filter((l) => l.scope === "network" || l.scope === "mihomo").slice(-100),
     };
   } else if (key === "GET /api/mihomo/status") {
     result = globalMihomoManager.getStatus();
