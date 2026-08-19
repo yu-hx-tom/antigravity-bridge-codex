@@ -2026,12 +2026,10 @@ async function writeCodexLauncher(model = runtime.settings.defaultModel) {
   const preferredAppId = codexAppUserModelId(preferredPath);
   const script = `$ErrorActionPreference = 'Stop'
 $appId = ${powershellLiteral(preferredAppId)}
-$settingsPath = ${powershellLiteral(SETTINGS_PATH)}
+$uiKey = ${powershellLiteral(runtime.settings.uiKey)}
 $bridgeUrl = ${powershellLiteral(`http://${UI_HOST}:${UI_PORT}`)}
 $model = ${powershellLiteral(model)}
-if (-not (Test-Path -LiteralPath $settingsPath)) { throw 'Bridge settings were not found.' }
-$settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-$headers = @{ 'X-Bridge-Key' = $settings.uiKey }
+$headers = @{ 'X-Bridge-Key' = $uiKey }
 $body = @{ model = $model } | ConvertTo-Json
 
 $codexProcesses = Get-Process -Name ChatGPT -ErrorAction SilentlyContinue
@@ -2044,14 +2042,23 @@ Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Stop-Process -ErrorAct
 Write-Output 'Codex has exited.'
 
 if ([string]::IsNullOrWhiteSpace($appId)) {
-  $package = Get-AppxPackage | Where-Object {
+  $package = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue | Where-Object {
     $_.Name -match '^OpenAI\\.(Codex|ChatGPT)$' -or $_.PackageFamilyName -match '^OpenAI\\.(Codex|ChatGPT)_'
   } | Select-Object -First 1
   if ($package) { $appId = $package.PackageFamilyName + '!App' }
 }
 
 if ([string]::IsNullOrWhiteSpace($appId)) {
-  throw 'The Codex Store AppID was not found. Set the current ChatGPT.exe path in Advanced Settings.'
+  $winAppsDir = Get-ChildItem -Path 'C:\\Program Files\\WindowsApps' -Filter 'OpenAI.Codex_*' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($winAppsDir) {
+    if ($winAppsDir.Name -match '^(.+?)_[^_]+_(?:x64|x86|arm64|neutral)__([^_]+)$') {
+      $appId = $matches[1] + '_' + $matches[2] + '!App'
+    }
+  }
+}
+
+if ([string]::IsNullOrWhiteSpace($appId)) {
+  $appId = 'OpenAI.Codex_2p2nqsd0c76g0!App'
 }
 
 $activated = $false
@@ -2060,13 +2067,11 @@ try {
   $activated = $true
   $target = 'shell:AppsFolder\\' + $appId
   Start-Process -FilePath 'explorer.exe' -ArgumentList @($target) -ErrorAction Stop | Out-Null
-  Write-Output ('Codex API Service activation sent: ' + $appId)
-
   $deadline = (Get-Date).AddSeconds(20)
-  while (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+  while (-not (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(ChatGPT|OpenAI\.Codex)$' }) -and (Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 250
   }
-  if (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue)) {
+  if (-not (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(ChatGPT|OpenAI\.Codex)$' })) {
     throw 'Codex did not start within 20 seconds.'
   }
 

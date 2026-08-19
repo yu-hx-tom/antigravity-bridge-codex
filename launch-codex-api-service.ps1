@@ -1,19 +1,10 @@
 $ErrorActionPreference = 'Stop'
-
-$dataDir = if ($env:BRIDGE_DATA_DIR) {
-  $env:BRIDGE_DATA_DIR
-} else {
-  Join-Path $env:LOCALAPPDATA 'AntigravityCodexBridge'
-}
-$settingsPath = Join-Path $dataDir 'settings.json'
-if (-not (Test-Path -LiteralPath $settingsPath)) {
-  throw 'Bridge settings were not found. Start Antigravity Codex Bridge first.'
-}
-$settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-$bridgePort = if ($env:BRIDGE_PORT) { $env:BRIDGE_PORT } else { '8787' }
-$bridgeUrl = 'http://127.0.0.1:' + $bridgePort
-$headers = @{ 'X-Bridge-Key' = $settings.uiKey }
-$body = @{ model = $settings.defaultModel } | ConvertTo-Json
+$appId = 'OpenAI.Codex_2p2nqsd0c76g0!App'
+$uiKey = 'agui_hiAOxFP2fBzJzk4t21EpsUW3CzCb_t6k'
+$bridgeUrl = 'http://127.0.0.1:8787'
+$model = 'gemini-3.7-flash-high'
+$headers = @{ 'X-Bridge-Key' = $uiKey }
+$body = @{ model = $model } | ConvertTo-Json
 
 $codexProcesses = Get-Process -Name ChatGPT -ErrorAction SilentlyContinue
 foreach ($process in $codexProcesses) { [void]$process.CloseMainWindow() }
@@ -24,30 +15,25 @@ while ((Get-Process -Name ChatGPT -ErrorAction SilentlyContinue) -and (Get-Date)
 Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Stop-Process -ErrorAction Stop
 Write-Output 'Codex has exited.'
 
-$package = Get-AppxPackage | Where-Object {
-  $_.Name -match '^OpenAI\.(Codex|ChatGPT)$' -or $_.PackageFamilyName -match '^OpenAI\.(Codex|ChatGPT)_'
-} | Select-Object -First 1
-if (-not $package) { throw 'The Microsoft Store Codex package was not found.' }
-$appId = $package.PackageFamilyName + '!App'
-
 $activated = $false
 try {
   Invoke-RestMethod -Method Post -Uri ($bridgeUrl + '/api/codex/activate') -Headers $headers -ContentType 'application/json' -Body $body | Out-Null
   $activated = $true
-  Start-Process -FilePath 'explorer.exe' -ArgumentList @('shell:AppsFolder\' + $appId) -ErrorAction Stop | Out-Null
+  $target = 'shell:AppsFolder\' + $appId
+  Start-Process -FilePath 'explorer.exe' -ArgumentList @($target) -ErrorAction Stop | Out-Null
   Write-Output ('Codex API Service activation sent: ' + $appId)
 
   $deadline = (Get-Date).AddSeconds(20)
-  while (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+  while (-not (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(ChatGPT|OpenAI.Codex)$' }) -and (Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 250
   }
-  if (-not (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue)) {
+  if (-not (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(ChatGPT|OpenAI.Codex)$' })) {
     throw 'Codex did not start within 20 seconds.'
   }
 
   Start-Sleep -Seconds 3
   Invoke-RestMethod -Method Post -Uri ($bridgeUrl + '/api/codex/reapply') -Headers $headers -ContentType 'application/json' -Body '{}' | Out-Null
-  Write-Output ('Codex API Service is active with model: ' + $settings.defaultModel)
+  Write-Output ('Codex API Service is active with model: ' + $model)
 } catch {
   if ($activated) {
     try {

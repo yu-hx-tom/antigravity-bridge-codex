@@ -2399,6 +2399,22 @@ namespace AntigravityDesktopClient
             }
         }
 
+        private string ExtractApiError(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            try
+            {
+                var obj = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                if (obj != null)
+                {
+                    if (obj.ContainsKey("error") && obj["error"] != null) return obj["error"].ToString();
+                    if (obj.ContainsKey("message") && obj["message"] != null) return obj["message"].ToString();
+                }
+            }
+            catch { }
+            return json;
+        }
+
         private string SendApiPost(string endpoint, string jsonBody = "{}", int timeoutMs = 12000)
         {
             if (string.IsNullOrEmpty(bridgeKey)) LoadBridgeKey();
@@ -2414,12 +2430,13 @@ namespace AntigravityDesktopClient
             {
                 os.Write(bytes, 0, bytes.Length);
             }
+            string respBody;
             try
             {
                 using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 using (StreamReader reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
                 {
-                    return reader.ReadToEnd();
+                    respBody = reader.ReadToEnd();
                 }
             }
             catch (WebException webEx)
@@ -2429,11 +2446,20 @@ namespace AntigravityDesktopClient
                     using (StreamReader reader = new StreamReader(webEx.Response.GetResponseStream(), Encoding.UTF8))
                     {
                         string errBody = reader.ReadToEnd();
-                        if (!string.IsNullOrEmpty(errBody)) return errBody;
+                        string msg = ExtractApiError(errBody);
+                        if (!string.IsNullOrEmpty(msg)) throw new Exception(msg);
+                        if (!string.IsNullOrEmpty(errBody)) throw new Exception(errBody);
                     }
                 }
                 throw;
             }
+
+            string err = ExtractApiError(respBody);
+            if (!string.IsNullOrEmpty(err) && respBody.Contains("\"error\""))
+            {
+                throw new Exception(err);
+            }
+            return respBody;
         }
 
         private void FetchDashboardData()
