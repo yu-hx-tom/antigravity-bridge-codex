@@ -25,6 +25,19 @@ using System.Windows.Threading;
 
 namespace AntigravityDesktopClient
 {
+    public sealed class ApiRequestException : Exception
+    {
+        public int StatusCode { get; private set; }
+        public string ResponseBody { get; private set; }
+
+        public ApiRequestException(string message, int statusCode, string responseBody, Exception inner = null)
+            : base(message, inner)
+        {
+            StatusCode = statusCode;
+            ResponseBody = responseBody;
+        }
+    }
+
     public class ModelPickerControl : Border
     {
         private TextBlock txtDisplay;
@@ -2043,7 +2056,7 @@ namespace AntigravityDesktopClient
                     var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
                     if (data == null) return;
 
-                    string curVer = data.ContainsKey("currentVersion") ? data["currentVersion"].ToString() : "0.4.0";
+                    string curVer = data.ContainsKey("currentVersion") ? data["currentVersion"].ToString() : "0.4.1";
                     string latVer = data.ContainsKey("latestVersion") ? data["latestVersion"].ToString() : curVer;
                     bool hasUpdate = data.ContainsKey("hasUpdate") && Convert.ToBoolean(data["hasUpdate"]);
                     string releaseUrl = data.ContainsKey("releaseUrl") ? data["releaseUrl"].ToString() : "https://github.com/yu-hx-tom/antigravity-bridge-codex/releases";
@@ -2385,21 +2398,60 @@ namespace AntigravityDesktopClient
             catch { }
         }
 
-        private string SendApiGet(string endpoint)
+        private string ExtractApiError(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            try
+            {
+                var obj = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                if (obj != null)
+                {
+                    if (obj.ContainsKey("error") && obj["error"] != null) return obj["error"].ToString();
+                    if (obj.ContainsKey("message") && obj["message"] != null) return obj["message"].ToString();
+                }
+            }
+            catch { }
+            return json;
+        }
+
+        private string SendApiGet(string endpoint, int timeoutMs = 5000)
         {
             if (string.IsNullOrEmpty(bridgeKey)) LoadBridgeKey();
             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(apiUrl + endpoint.TrimStart('/'));
             req.Method = "GET";
-            req.Timeout = 3500;
+            req.Timeout = timeoutMs;
+            req.ReadWriteTimeout = timeoutMs;
             if (!string.IsNullOrEmpty(bridgeKey)) req.Headers["X-Bridge-Key"] = bridgeKey;
-            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
-            using (StreamReader reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+
+            try
             {
-                return reader.ReadToEnd();
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (StreamReader reader = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                {
+                    return reader.ReadToEnd();
+                }
+            }
+            catch (WebException webEx)
+            {
+                int statusCode = 0;
+                string body = "";
+                HttpWebResponse resp = webEx.Response as HttpWebResponse;
+                if (resp != null)
+                {
+                    statusCode = (int)resp.StatusCode;
+                    using (Stream stream = resp.GetResponseStream())
+                    using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                    {
+                        body = reader.ReadToEnd();
+                    }
+                }
+                string message = ExtractApiError(body);
+                if (string.IsNullOrWhiteSpace(message)) message = string.Format("API GET 请求失败 (HTTP {0})", statusCode);
+                throw new ApiRequestException(message, statusCode, body, webEx);
             }
         }
 
-        private string SendApiPost(string endpoint, string jsonBody = "{}", int timeoutMs = 12000)
+        private string SendApiPost(string endpoint, string jsonBody = "{}", int timeoutMs = 15000)
         {
             if (string.IsNullOrEmpty(bridgeKey)) LoadBridgeKey();
             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(apiUrl + endpoint.TrimStart('/'));
@@ -2424,15 +2476,21 @@ namespace AntigravityDesktopClient
             }
             catch (WebException webEx)
             {
-                if (webEx.Response != null)
+                int statusCode = 0;
+                string body = "";
+                HttpWebResponse resp = webEx.Response as HttpWebResponse;
+                if (resp != null)
                 {
-                    using (StreamReader reader = new StreamReader(webEx.Response.GetResponseStream(), Encoding.UTF8))
+                    statusCode = (int)resp.StatusCode;
+                    using (Stream stream = resp.GetResponseStream())
+                    using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
                     {
-                        string errBody = reader.ReadToEnd();
-                        if (!string.IsNullOrEmpty(errBody)) return errBody;
+                        body = reader.ReadToEnd();
                     }
                 }
-                throw;
+                string message = ExtractApiError(body);
+                if (string.IsNullOrWhiteSpace(message)) message = string.Format("API POST 请求失败 (HTTP {0})", statusCode);
+                throw new ApiRequestException(message, statusCode, body, webEx);
             }
         }
 
@@ -4324,13 +4382,20 @@ namespace AntigravityDesktopClient
                     var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
                     var lats = dict != null && dict.ContainsKey("latencies") ? dict["latencies"] as Dictionary<string, object> : null;
                     var measurements = dict != null && dict.ContainsKey("measurements") ? dict["measurements"] as Dictionary<string, object> : null;
+                    var summary = dict != null && dict.ContainsKey("summary") ? dict["summary"] as Dictionary<string, object> : null;
+
                     if (lats != null)
                     {
                         Dispatcher.Invoke((Action)delegate
                         {
                             foreach (var kvp in lats)
                             {
-                                nodeLatencies[kvp.Key] = Convert.ToInt32(kvp.Value);
+                                if (kvp.Value == null) nodeLatencies[kvp.Key] = 0;
+                                else
+                                {
+                                    int val = 0;
+                                    if (int.TryParse(kvp.Value.ToString(), out val)) nodeLatencies[kvp.Key] = val;
+                                }
                             }
                             if (measurements != null)
                             {
@@ -4340,13 +4405,48 @@ namespace AntigravityDesktopClient
                                     if (detail != null && detail.ContainsKey("label")) nodeLatencyLabels[kvp.Key] = detail["label"].ToString();
                                 }
                             }
-                            txtProxySyncStatus.Text = "✓ 已激活节点显示 Listener 真实全链路；未激活节点不再用国内入口握手冒充延迟";
-                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+
+                            int succ = 0, fail = 0, inact = 0;
+                            if (summary != null)
+                            {
+                                if (summary.ContainsKey("success")) int.TryParse(summary["success"].ToString(), out succ);
+                                if (summary.ContainsKey("failed")) int.TryParse(summary["failed"].ToString(), out fail);
+                                if (summary.ContainsKey("inactive")) int.TryParse(summary["inactive"].ToString(), out inact);
+                            }
+
+                            if (succ > 0 && fail == 0)
+                            {
+                                txtProxySyncStatus.Text = string.Format("✓ 已完成全链路测速，{0} 个已激活独立通道全部正常", succ);
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            }
+                            else if (succ > 0 && fail > 0)
+                            {
+                                txtProxySyncStatus.Text = string.Format("⚠ 已完成测速：{0} 个通道正常，{1} 个通道超时", succ, fail);
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                            }
+                            else if (succ == 0 && fail > 0)
+                            {
+                                txtProxySyncStatus.Text = "⚠️ 测速完成：未发现可用独立出口";
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                            }
+                            else
+                            {
+                                txtProxySyncStatus.Text = "尚无可测速的已激活独立通道 (请先勾选并一键激活)";
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColTextMuted);
+                            }
+
                             RenderAvailableNodesSelector();
                         });
                     }
                 }
-                catch {}
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        txtProxySyncStatus.Text = "⚠️ 测速异常: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                    });
+                }
             });
         }
 
@@ -4365,13 +4465,20 @@ namespace AntigravityDesktopClient
                     var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
                     var lats = dict != null && dict.ContainsKey("latencies") ? dict["latencies"] as Dictionary<string, object> : null;
                     var measurements = dict != null && dict.ContainsKey("measurements") ? dict["measurements"] as Dictionary<string, object> : null;
+                    var summary = dict != null && dict.ContainsKey("summary") ? dict["summary"] as Dictionary<string, object> : null;
+
                     if (lats != null)
                     {
                         Dispatcher.Invoke((Action)delegate
                         {
                             foreach (var kvp in lats)
                             {
-                                egressLatencies[kvp.Key] = Convert.ToInt32(kvp.Value);
+                                if (kvp.Value == null) egressLatencies[kvp.Key] = 0;
+                                else
+                                {
+                                    int val = 0;
+                                    if (int.TryParse(kvp.Value.ToString(), out val)) egressLatencies[kvp.Key] = val;
+                                }
                             }
                             if (measurements != null)
                             {
@@ -4381,13 +4488,42 @@ namespace AntigravityDesktopClient
                                     if (detail != null && detail.ContainsKey("label")) egressLatencyLabels[kvp.Key] = detail["label"].ToString();
                                 }
                             }
-                            txtProxySyncStatus.Text = "✓ 已通过各 Listener 实测中转 + 落地的通道全链路延迟";
-                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+
+                            int succ = 0, fail = 0;
+                            if (summary != null)
+                            {
+                                if (summary.ContainsKey("success")) int.TryParse(summary["success"].ToString(), out succ);
+                                if (summary.ContainsKey("failed")) int.TryParse(summary["failed"].ToString(), out fail);
+                            }
+
+                            if (succ > 0 && fail == 0)
+                            {
+                                txtProxySyncStatus.Text = string.Format("✓ 已通过各 Listener 实测全链路延迟 ({0} 个通道正常)", succ);
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            }
+                            else if (succ > 0 && fail > 0)
+                            {
+                                txtProxySyncStatus.Text = string.Format("⚠ 测速完成：{0} 个通道正常，{1} 个通道异常", succ, fail);
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                            }
+                            else
+                            {
+                                txtProxySyncStatus.Text = "⚠️ 独立通道测速失败，端口可能未正常监听";
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                            }
+
                             RenderEgressPlanCards(currentEgressPlanList);
                         });
                     }
                 }
-                catch {}
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        txtProxySyncStatus.Text = "⚠️ 测速异常: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                    });
+                }
             });
         }
 
@@ -4460,21 +4596,42 @@ namespace AntigravityDesktopClient
             {
                 try
                 {
-                    string res = SendApiPost("api/network/activate-embedded", reqBody);
+                    // 激活接口使用 90 秒超时以覆盖完整物理探测
+                    string res = SendApiPost("api/network/activate-embedded", reqBody, 90000);
                     var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
-                    var activePlan = dict != null && dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
-                    string msg = dict != null && dict.ContainsKey("message") ? dict["message"].ToString() : "内置专向内核已成功就绪";
+                    if (dict == null) throw new InvalidOperationException("后端返回了空数据");
+
+                    bool isOk = dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);
+                    string state = dict.ContainsKey("state") ? dict["state"].ToString() : "failed";
+                    var activePlan = dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
+                    string msg = dict.ContainsKey("message") ? dict["message"].ToString() : "独立通道已就绪";
+
+                    if (!isOk)
+                    {
+                        string err = dict.ContainsKey("error") ? dict["error"].ToString() : msg;
+                        throw new InvalidOperationException(string.IsNullOrWhiteSpace(err) ? "独立通道激活失败" : err);
+                    }
+
+                    if (state != "active" && state != "partial")
+                    {
+                        throw new InvalidOperationException("激活状态异常: " + state);
+                    }
+
+                    if (activePlan == null || activePlan.Count == 0)
+                    {
+                        throw new InvalidOperationException("后端未返回任何有效独立通道");
+                    }
 
                     Dispatcher.Invoke((Action)delegate
                     {
                         if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
-                        currentActivationState = "active";
+                        currentActivationState = state;
                         currentActiveEgressPlanList = activePlan;
                         currentEgressPlanList = activePlan;
                         txtProxySyncStatus.Text = msg;
-                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(state == "partial" ? ColAmber : ColGreen);
                         RenderEgressPlanCards(activePlan);
-                        ShowToast("✓ 内置专向内核已启动，独立通道已完全解锁！");
+                        ShowToast(state == "partial" ? "⚠ 独立通道已部分就绪，可用节点已解锁" : "✓ 内置专向内核已启动，独立通道已完全解锁！");
                         PingAllCandidateNodes();
                     });
                 }
@@ -4483,7 +4640,8 @@ namespace AntigravityDesktopClient
                     Dispatcher.Invoke((Action)delegate
                     {
                         if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
-                        txtProxySyncStatus.Text = "⚠️ 启动内置内核失败: " + ex.Message;
+                        currentActivationState = "failed";
+                        txtProxySyncStatus.Text = "⚠️ 启动独立通道失败: " + ex.Message;
                         txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
                         MessageBox.Show(ex.Message, "独立内核启动提示", MessageBoxButton.OK, MessageBoxImage.Warning);
                     });
