@@ -51,6 +51,8 @@ const appFiles = [
   "subscription.mjs",
   "mihomo-config.mjs",
   "mihomo-manager.mjs",
+  "mihomo-runtime.mjs",
+  "telemetry.mjs",
   "mihomo.lock.json",
   "package.json",
   "cliproxy.lock.json",
@@ -71,12 +73,14 @@ if (fsSync.existsSync(nodeModulesSrc)) {
   await fs.cp(nodeModulesSrc, nodeModulesDest, { recursive: true });
 }
 
-// Copy bin/ (mihomo.exe)
+// Copy bin/ (mihomo.exe) - V0.4 Mandatory Check
 const binSrc = path.join(ROOT, "bin");
-const binDest = path.join(APP_DIR, "bin");
-if (fsSync.existsSync(binSrc)) {
-  await fs.cp(binSrc, binDest, { recursive: true });
+const binMihomoSrc = path.join(binSrc, "mihomo.exe");
+if (!fsSync.existsSync(binMihomoSrc)) {
+  throw new Error("BUILD FAILED: bin/mihomo.exe is mandatory for V0.4 Embedded Mihomo packaging, but was not found. Please run 'npm run install:mihomo' first.");
 }
+const binDest = path.join(APP_DIR, "bin");
+await fs.cp(binSrc, binDest, { recursive: true });
 
 // 4. Compile Native Desktop GUI Cockpit .EXE (WPF Native Window)
 console.log("Compiling Native Windows Desktop Cockpit Application...");

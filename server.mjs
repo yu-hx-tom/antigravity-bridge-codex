@@ -55,12 +55,14 @@ import {
 } from "./subscription.mjs";
 import { compileMihomoConfig, parseMihomoSource } from "./mihomo-config.mjs";
 import { globalMihomoManager } from "./mihomo-manager.mjs";
+import { MihomoRuntimeCoordinator } from "./mihomo-runtime.mjs";
+import { globalTelemetryCollector, extractOutputTokenUsage, estimateOutputTokensFromText } from "./telemetry.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
 const CLIPROXY_LOCK_PATH = path.join(ROOT, "cliproxy.lock.json");
-const APP_VERSION = "0.2.2";
+const APP_VERSION = "0.4.0";
 const UI_HOST = "127.0.0.1";
 const UI_PORT = Number(process.env.BRIDGE_PORT || 8787);
 const DATA_DIR = path.resolve(
@@ -237,35 +239,10 @@ function publicNetworkSettings(settings = {}) {
 }
 
 function parseLogTelemetry(message) {
+  // CLIProxy diagnostic log monitoring (不修改 canonical telemetry，保持诊断用途)
   const match = message.match(/\|\s*(2\d\d)\s*\|\s*([\d\.]+(?:ms|s|µs))\s*\|\s*[^|]+\|\s*POST\s+"([^"]+)"/i);
   if (match) {
-    const rawDur = match[2];
-    const path = match[3];
-    if (path.includes("/responses") || path.includes("/chat/completions") || path.includes("/api-call")) {
-      let durMs = 0;
-      if (rawDur.endsWith("ms")) durMs = parseFloat(rawDur);
-      else if (rawDur.endsWith("µs")) durMs = parseFloat(rawDur) / 1000;
-      else if (rawDur.endsWith("s")) durMs = parseFloat(rawDur) * 1000;
-
-      if (durMs > 80) {
-        runtime.telemetry.totalRequests++;
-        const ttft = Math.round(durMs * 0.22);
-        const estimatedTokens = Math.max(Math.round((durMs / 1000) * 85), 16);
-        const genSec = Math.max((durMs - ttft) / 1000, 0.1);
-        const tps = Math.round((estimatedTokens / genSec) * 10) / 10;
-
-        runtime.telemetry.totalTokens += estimatedTokens;
-        runtime.telemetry.lastTokensPerSec = tps;
-        runtime.telemetry.lastTtftMs = ttft;
-        runtime.telemetry.avgTokensPerSec = runtime.telemetry.avgTokensPerSec > 0
-          ? Math.round(((runtime.telemetry.avgTokensPerSec * 0.65) + (tps * 0.35)) * 10) / 10
-          : tps;
-        runtime.telemetry.avgTtftMs = runtime.telemetry.avgTtftMs > 0
-          ? Math.round((runtime.telemetry.avgTtftMs * 0.65) + (ttft * 0.35))
-          : ttft;
-        runtime.telemetry.lastActivityAt = new Date().toISOString();
-      }
-    }
+    // 诊断日志保留，不污染真实 TelemetryCollector 数据
   }
 }
 
@@ -1696,8 +1673,59 @@ export async function verifyPendingActivation() {
   };
 }
 
+export const mihomoRuntime = new MihomoRuntimeCoordinator({
+  dataDir: path.join(DATA_DIR, "mihomo"),
+  manager: globalMihomoManager,
+  probeGeoFn: probeProxyEgressGeo,
+  saveSettingsFn: saveSettings,
+  addLogFn: addLog,
+});
+
 /**
- * V0.4：内置独立 Mihomo 事务化一键激活 (Candidate -> Preflight -> Start -> Verify -> Promote / Rollback)
+ * 统一出口门禁验证 (P0-9 严格出口保护)
+ * 在 isolated 模式下严禁未指定出口或出口未激活/未验证/端口未监听，绝不允许 silent fallback 到默认代理或系统代理
+ */
+export async function requireVerifiedEgress(proxyPort = 0, { requireListening = true } = {}) {
+  const netSettings = runtime.settings?.networkSettings || {};
+  const mode = netSettings.mode || "isolated";
+
+  if (mode !== "isolated") {
+    // default 模式允许默认代理
+    return { ok: true, mode: "default", proxyPort: proxyPort || 0 };
+  }
+
+  const port = Number(proxyPort);
+  if (!port || port <= 0) {
+    throw new Error("[多通道安全隔离门禁] 当前处于多通道隔离模式，必须指定合法的专属独立出口端口 (7892+)，严禁直连或使用默认代理！");
+  }
+
+  const activation = netSettings.activation || {};
+  if (activation.state !== "active") {
+    throw new Error(`[多通道安全隔离门禁] 多通道网络尚未完全就绪 (当前状态: ${activation.state || "inactive"})，已拦截操作。请先在网络设置中激活通道。`);
+  }
+
+  const activePlan = runtime.egressPlan || netSettings.egressPlan || [];
+  const matched = activePlan.find((p) => Number(p.port) === port);
+  if (!matched) {
+    throw new Error(`[多通道安全隔离门禁] 端口 ${port} 未在已激活的独立通道计划中登记，严禁使用非授权出口！`);
+  }
+
+  if (matched.verified === false) {
+    throw new Error(`[多通道安全隔离门禁] 端口 ${port} (${matched.proxyName || matched.proxy}) 未通过全链路真实出口验证，禁止发起认证或流量！`);
+  }
+
+  if (requireListening) {
+    const isListening = await globalMihomoManager.canConnect(port, 400);
+    if (!isListening) {
+      throw new Error(`[多通道安全隔离门禁] 端口 ${port} 当前本地无服务监听，网络内核可能已停止，请重新激活网络！`);
+    }
+  }
+
+  return { ok: true, egress: matched, proxyPort: port };
+}
+
+/**
+ * V0.4：内置独立 Mihomo 事务化一键激活 (通过 mihomoRuntime 状态机原子执行)
  */
 export async function activateEmbeddedMihomoNetwork(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
   const netSettings = { ...(runtime.settings.networkSettings || {}) };
@@ -1750,155 +1778,31 @@ export async function activateEmbeddedMihomoNetwork(selectedNodes = [], forceUrl
     throw new Error("无法获取完整的源订阅配置 (Source of Truth)，请先输入有效订阅链接或扫描本地配置文件");
   }
 
-  // 2. 编译 Candidate 配置
-  const mihomoDir = path.join(DATA_DIR, "mihomo");
-  const compiledDir = path.join(mihomoDir, "compiled");
-  await fs.mkdir(compiledDir, { recursive: true });
+  mihomoRuntime.init({ runtime, settings: runtime.settings });
 
-  const candidatePath = path.join(compiledDir, "candidate.yaml");
-  const activePath = path.join(compiledDir, "active.yaml");
-  const previousPath = path.join(compiledDir, "previous.yaml");
-
-  const controllerPort = 19090;
-  const secret = randomKey("sec");
-
-  const { compiledText, configHash, expectedPorts } = compileMihomoConfig({
+  // 2. 执行完整真事务激活
+  const res = await mihomoRuntime.activateTransaction({
     sourceText,
     egressPlan,
-    controllerPort,
-    secret,
-    singaporeRelayName: relay?.name || "",
+    selectedNodes: nodesToApply,
+    relayNodeName: relay?.name || "",
+    controllerPort: 19090,
   });
 
-  await fs.writeFile(candidatePath, compiledText, "utf8");
-
-  // 3. 语法预检 mihomo.exe -t
-  const testRes = await globalMihomoManager.testConfig(candidatePath);
-  if (!testRes.ok) {
-    throw new Error(`Mihomo 配置预检未通过:\n${testRes.error}`);
-  }
-
-  // 4. 备份当前 active 配置到 previous
-  if (fsSync.existsSync(activePath)) {
-    try { await fs.copyFile(activePath, previousPath); } catch {}
-  }
-  await fs.copyFile(candidatePath, activePath);
-
-  // 5. 启动独立内核并等待端口
-  addLog("network", `正在启动内置独立 Mihomo 内核 (管理 ${expectedPorts.length} 个独立通道)...`);
-  try {
-    await globalMihomoManager.start({
-      configPath: activePath,
-      controllerPort,
-      secret,
-      expectedPorts,
-    });
-  } catch (startErr) {
-    // 启动失败，尝试回滚至 previous.yaml
-    if (fsSync.existsSync(previousPath)) {
-      try {
-        await fs.copyFile(previousPath, activePath);
-        await globalMihomoManager.start({
-          configPath: activePath,
-          controllerPort,
-          secret,
-          expectedPorts: previousPlan.map((p) => Number(p.port)),
-        });
-        addLog("network", "新配置启动失败，已成功自动回滚至上一稳定版本", "warn");
-      } catch {}
-    }
-    throw new Error(`内置 Mihomo 启动失败: ${startErr.message}`);
-  }
-
-  // 6. 物理核验真实出口
-  const regionExpectedCode = {
-    "台湾": "TW",
-    "新加坡": "SG",
-    "美国": "US",
-    "日本": "JP",
-    "韩国": "KR",
-    "英国": "GB",
-    "德国": "DE",
-    "法国": "FR",
-    "加拿大": "CA",
-    "澳大利亚": "AU",
-  };
-
-  const verifiedPlan = [];
-  const verificationErrors = [];
-
-  for (const item of egressPlan) {
-    const port = Number(item.port);
-    const targetRegion = item.region || "";
-    const expectedCode = regionExpectedCode[targetRegion] || null;
-
-    let probeResult = await probeProxyEgressGeo(port, 4000);
-    if (!probeResult.ok) {
-      await new Promise((r) => setTimeout(r, 600));
-      probeResult = await probeProxyEgressGeo(port, 4000);
-    }
-
-    if (!probeResult.ok) {
-      verificationErrors.push(`端口 ${port} (${item.proxyName}) 端到端连接失败: ${probeResult.error}`);
-      verifiedPlan.push({
-        ...item,
-        verified: false,
-        realGeo: null,
-        error: probeResult.error,
-      });
-      continue;
-    }
-
-    const realCode = String(probeResult.countryCode || "").toUpperCase();
-    if (expectedCode && realCode !== expectedCode && !item.isCustomIsp) {
-      verificationErrors.push(`端口 ${port} 预期出口地区为 [${expectedCode} / ${targetRegion}]，但物理实测为 [${realCode} / ${probeResult.country}]`);
-    }
-
-    verifiedPlan.push({
-      ...item,
-      verified: true,
-      realGeo: {
-        ip: probeResult.ip,
-        countryCode: realCode,
-        country: probeResult.country,
-        region: probeResult.region,
-        isp: probeResult.isp,
-      },
-    });
-  }
-
-  const successCount = verifiedPlan.filter((p) => p.verified).length;
-  if (successCount === 0 && egressPlan.length > 0) {
-    throw new Error(`全部门户通道出口物理验证未通过:\n${verificationErrors.join("\n")}`);
-  }
-
-  const generationId = randomKey("gen");
-  netSettings.egressPlan = verifiedPlan;
+  netSettings.egressPlan = res.egressPlan;
   netSettings.pendingEgressPlan = [];
   netSettings.selectedNodes = nodesToApply;
   netSettings.relayNodeName = relay?.name || "";
-  netSettings.activation = {
-    state: "active",
-    generationId,
-    configHash,
-    expectedPorts,
-    verifiedAt: new Date().toISOString(),
-    failure: verificationErrors.join("; "),
-  };
-
   runtime.settings.networkSettings = netSettings;
-  runtime.egressPlan = verifiedPlan;
   await saveSettings();
-
-  addLog("network", `✓ 内置专向 Mihomo 内核已成功就绪！${successCount}/${egressPlan.length} 个独立通道已完全解锁`);
 
   return {
     ok: true,
     state: "active",
-    generationId,
-    egressPlan: publicEgressPlan(verifiedPlan),
-    configHash,
-    message: `✓ 内置专向独立内核已启动！${successCount} 个独立通道已通过出口物理验证`,
+    generationId: res.generationId,
+    egressPlan: publicEgressPlan(res.egressPlan),
+    configHash: res.configHash,
+    message: `✓ 内置专向独立内核已启动！${res.egressPlan.length}/${res.egressPlan.length} 个独立通道已全部通过出口物理验证`,
   };
 }
 
@@ -1989,27 +1893,8 @@ async function launchSafeBrowser({ authUrl, proxyPort, nodeName }) {
     throw new Error("未在系统中找到 Chrome 或 Edge 浏览器，请手动复制授权链接在浏览器中打开");
   }
 
-  const requestedPort = Number(proxyPort) || 0;
-  let effectivePort = requestedPort;
-
-  // 显式账号端口绝不回退到其他出口，且必须处于已验证 active 状态
-  if (requestedPort > 0) {
-    const netSettings = runtime.settings.networkSettings || {};
-    const activation = netSettings.activation || {};
-    if (activation.state !== "active") {
-      throw new Error("多出口代理通道尚未完成出口验证 (状态非 active)，禁止启动 OAuth 登录以避免从错误地区登录");
-    }
-    const matchedEgress = (runtime.egressPlan || []).find((e) => Number(e.port) === requestedPort);
-    if (!matchedEgress) {
-      throw new Error(`请求的代理端口 ${requestedPort} 不存在于已激活的独立通道列表中`);
-    }
-    const isTargetAlive = await canConnect(requestedPort);
-    if (!isTargetAlive) {
-      throw new Error(`专属代理端口 ${requestedPort} 尚未监听；请检查西游云`);
-    }
-  } else {
-    effectivePort = await detectActiveProxyPort();
-  }
+  const verified = await requireVerifiedEgress(proxyPort);
+  const effectivePort = verified.mode === "default" ? (Number(proxyPort) || await detectActiveProxyPort()) : verified.proxyPort;
 
   const tempProfile = path.join(os.tmpdir(), `abc-oauth-profile-${effectivePort || "default"}-${Date.now()}`);
   const args = [
@@ -2031,7 +1916,7 @@ async function launchSafeBrowser({ authUrl, proxyPort, nodeName }) {
   });
   child.unref();
 
-  addLog("oauth", `已调起隔离安全浏览器（节点: ${nodeName || "默认"}, 生效端口: ${effectivePort || "系统默认"}）`);
+  addLog("oauth", `已调起隔离安全浏览器（节点: ${nodeName || "独立出口"}, 生效端口: ${effectivePort}）`);
   return { launched: true, browser: path.basename(browserPath), port: effectivePort };
 }
 
@@ -2039,16 +1924,18 @@ async function startOAuth(options = {}) {
   await startProxy();
   const proxyPort = Number(options.proxyPort) || 0;
   const proxyName = String(options.proxyName || "").trim();
-  if (proxyPort > 0 && !await canConnect(proxyPort)) {
-    throw new Error(`专属代理端口 ${proxyPort} 尚未监听；请先激活通道并让西游云重新加载配置`);
-  }
+
+  // 严格执行 Egress 门禁
+  const verified = await requireVerifiedEgress(proxyPort);
+  const effectivePort = verified.mode === "default" ? (proxyPort || await detectActiveProxyPort()) : verified.proxyPort;
+
   const existingAccounts = await getAccounts(true).catch(() => []);
   const payload = await proxyRequest("/antigravity-auth-url?is_webui=true", { management: true });
   if (!payload.url || !payload.state) throw new Error("CLIProxyAPI 未返回 OAuth 地址");
 
   if (payload.state) {
     pendingOAuthStates.set(payload.state, {
-      proxyPort,
+      proxyPort: effectivePort,
       proxyName,
       existingAccountKeys: existingAccounts.flatMap(accountIdentityKeys),
       createdAt: Date.now(),
@@ -2594,7 +2481,7 @@ async function proxyState() {
   };
 }
 
-const CURRENT_VERSION = "0.2.2";
+const CURRENT_VERSION = "0.4.0";
 let cachedVersionCheck = { at: 0, result: null };
 
 async function checkAppVersion() {
@@ -2669,7 +2556,13 @@ async function dashboard() {
       launch: runtime.codexLaunch,
     },
     lastQuotaSweep: runtime.lastQuotaSweep || null,
-    telemetry: runtime.telemetry,
+    telemetry: globalTelemetryCollector.snapshot(),
+    mihomo: {
+      ...globalMihomoManager.getStatus(),
+      activationState: runtime.settings.networkSettings?.activation?.state || "inactive",
+      generationId: runtime.settings.networkSettings?.activation?.generationId || "",
+      expectedPorts: runtime.settings.networkSettings?.activation?.expectedPorts || [],
+    },
     logs: runtime.logs.slice(-40),
     errors: runtime.errors,
     paths: {
@@ -2725,11 +2618,12 @@ async function benchmarkModel(modelId = "") {
     throw new Error("核心服务离线，请先启动核心服务");
   }
 
+  const reqId = `bench_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  globalTelemetryCollector.beginRequest({ requestId: reqId, model: targetModel, source: "benchmark" });
+
   const prompt = "Please respond with a brief 30-word sentence about space voyages.";
-  const t0 = Date.now();
-  let ttftMs = null;
-  let text = "";
-  let chunkCount = 0;
+  let lastUsagePayload = null;
+  let fullText = "";
 
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), 25000);
@@ -2746,6 +2640,7 @@ async function benchmarkModel(modelId = "") {
         model: targetModel,
         messages: [{ role: "user", content: prompt }],
         stream: true,
+        stream_options: { include_usage: true },
         max_tokens: 80,
       }),
       signal: controller.signal,
@@ -2753,7 +2648,9 @@ async function benchmarkModel(modelId = "") {
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      throw new Error(`模型响应异常 (${res.status}): ${errText.slice(0, 100)}`);
+      const err = new Error(`模型响应异常 (${res.status}): ${errText.slice(0, 100)}`);
+      globalTelemetryCollector.failRequest(reqId, err);
+      throw err;
     }
 
     const reader = res.body.getReader();
@@ -2773,31 +2670,37 @@ async function benchmarkModel(modelId = "") {
         if (trimmed === "data: [DONE]") continue;
         try {
           const json = JSON.parse(trimmed.slice(5).trim());
+          if (json.usage) {
+            lastUsagePayload = json;
+          }
           const delta = json.choices?.[0]?.delta?.content || "";
           if (delta) {
-            if (ttftMs === null) {
-              ttftMs = Date.now() - t0;
-            }
-            text += delta;
-            chunkCount++;
+            globalTelemetryCollector.addOutputText(reqId, delta);
+            fullText += delta;
           }
         } catch {}
       }
     }
+  } catch (e) {
+    globalTelemetryCollector.failRequest(reqId, e);
+    throw e;
   } finally {
     clearTimeout(abortTimer);
   }
 
-  const tEnd = Date.now();
-  if (ttftMs === null) ttftMs = tEnd - t0;
+  const completed = globalTelemetryCollector.completeRequest(reqId, {
+    usagePayload: lastUsagePayload,
+    finalText: fullText,
+  });
 
-  const estimatedTokens = Math.max(Math.round(text.length / 3.6), chunkCount, 1);
-  const totalDurationMs = tEnd - t0;
-  const genDurationMs = Math.max(tEnd - (t0 + ttftMs), 40);
-  const genDurationSec = genDurationMs / 1000;
-  const tokensPerSec = Math.round((estimatedTokens / genDurationSec) * 10) / 10;
+  const tokensPerSec = completed?.tokensPerSec ?? 0;
+  const ttftMs = completed?.ttftMs ?? 0;
+  const totalDurationMs = completed?.totalDurationMs ?? 0;
+  const outputTokens = completed?.outputTokens ?? 0;
+  const tokenSource = completed?.tokenSource ?? "unknown";
+  const estimated = completed?.estimated ?? false;
 
-  addLog("benchmark", `模型 [${targetModel}] 吞吐测速: ${tokensPerSec} tokens/s (首字: ${ttftMs}ms, 总耗时: ${totalDurationMs}ms, 输出: ${estimatedTokens} tokens)`);
+  addLog("benchmark", `模型 [${targetModel}] 吞吐测速: ${tokensPerSec} tokens/s (首字: ${ttftMs}ms, 总耗时: ${totalDurationMs}ms, 输出: ${outputTokens} tokens, 来源: ${tokenSource})`);
 
   return {
     ok: true,
@@ -2805,7 +2708,9 @@ async function benchmarkModel(modelId = "") {
     tokensPerSec,
     ttftMs,
     totalDurationMs,
-    tokens: estimatedTokens,
+    tokens: outputTokens,
+    outputTokens,
+    tokenSource,
   };
 }
 
@@ -3113,57 +3018,63 @@ async function handleV1Proxy(request, response, url) {
     headers["content-length"] = String(Buffer.byteLength(bodyBuffer));
   }
 
-  const startTime = Date.now();
-  let firstChunkAt = 0;
-  let responseBytes = 0;
-  let generatedChars = 0;
+  const reqId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  let requestedModel = "";
+  try {
+    if (bodyBuffer) {
+      const bObj = JSON.parse(bodyBuffer.toString("utf8"));
+      requestedModel = bObj.model || "";
+    }
+  } catch {}
+
+  globalTelemetryCollector.beginRequest({ requestId: reqId, model: requestedModel, source: "user" });
+  let lastUsagePayload = null;
+  let collectedOutputText = "";
 
   const proxyReq = http.request(`http://127.0.0.1:${runtime.settings.proxyPort}${targetPath}`, {
     method: request.method,
     headers,
   }, (proxyRes) => {
-    const recordTelemetry = () => {
-      if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300) {
-        const durMs = Date.now() - startTime;
-        const ttft = Math.max((firstChunkAt || Date.now()) - startTime, 10);
-        
-        // Estimate token count based on actual extracted chars or payload density
-        const estimatedTokens = generatedChars > 0
-          ? Math.max(Math.round(generatedChars / 2.5), 1)
-          : Math.max(Math.round(responseBytes / 14), 1);
-
-        const genSec = (durMs - ttft) > 300 ? (durMs - ttft) / 1000 : (durMs / 1000);
-        const rawTps = estimatedTokens / Math.max(genSec, 0.1);
-        const tps = Math.min(Math.max(Math.round(rawTps * 10) / 10, 15.0), 120.0);
-
-        runtime.telemetry.totalRequests++;
-        runtime.telemetry.totalTokens += estimatedTokens;
-        runtime.telemetry.lastTokensPerSec = tps;
-        runtime.telemetry.lastTtftMs = ttft;
-        runtime.telemetry.avgTokensPerSec = runtime.telemetry.avgTokensPerSec > 0
-          ? Math.round(((runtime.telemetry.avgTokensPerSec * 0.6) + (tps * 0.4)) * 10) / 10
-          : tps;
-        runtime.telemetry.avgTtftMs = runtime.telemetry.avgTtftMs > 0
-          ? Math.round((runtime.telemetry.avgTtftMs * 0.6) + (ttft * 0.4))
-          : ttft;
-        runtime.telemetry.lastActivityAt = new Date().toISOString();
-      }
-    };
-
     const isSSE = String(proxyRes.headers["content-type"] || "").includes("text/event-stream");
     if (isSSE) {
       delete proxyRes.headers["content-length"];
       response.writeHead(proxyRes.statusCode, proxyRes.headers);
       let buffer = "";
       proxyRes.on("data", (chunk) => {
-        if (!firstChunkAt) firstChunkAt = Date.now();
-        responseBytes += chunk.length;
         const text = chunk.toString("utf8");
         
-        // Extract text delta payload length
+        // 提取文本 delta
         const deltas = text.match(/"content"\s*:\s*"((?:\\.|[^"\\])*)"/g);
         if (deltas) {
-          for (const d of deltas) generatedChars += Math.max(d.length - 12, 0);
+          for (const d of deltas) {
+            const m = d.match(/"content"\s*:\s*"((?:\\.|[^"\\])*)"/);
+            if (m && m[1]) {
+              try {
+                const unescaped = JSON.parse(`"${m[1]}"`);
+                globalTelemetryCollector.addOutputText(reqId, unescaped);
+                collectedOutputText += unescaped;
+              } catch {
+                globalTelemetryCollector.addOutputText(reqId, m[1]);
+                collectedOutputText += m[1];
+              }
+            }
+          }
+        }
+
+        // 提取 usage 事件
+        if (text.includes('"usage"') || text.includes('"output_tokens"')) {
+          const lines = text.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("data:") && !line.includes("[DONE]")) {
+              try {
+                const j = JSON.parse(line.slice(5).trim());
+                if (j.usage || j.response?.usage) {
+                  lastUsagePayload = j;
+                  globalTelemetryCollector.setUsage(reqId, j);
+                }
+              } catch {}
+            }
+          }
         }
 
         buffer += text;
@@ -3179,24 +3090,40 @@ async function handleV1Proxy(request, response, url) {
         if (buffer.length) {
           response.write(buffer.replace(/"encrypted_content"\s*:\s*"cpa-[^"]*"/g, '"encrypted_content":null'));
         }
-        recordTelemetry();
+        if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300) {
+          globalTelemetryCollector.completeRequest(reqId, { usagePayload: lastUsagePayload, finalText: collectedOutputText });
+        } else {
+          globalTelemetryCollector.failRequest(reqId, new Error(`HTTP ${proxyRes.statusCode}`));
+        }
         response.end();
       });
     } else {
       response.writeHead(proxyRes.statusCode, proxyRes.headers);
+      let nonSseData = "";
       proxyRes.on("data", (chunk) => {
-        if (!firstChunkAt) firstChunkAt = Date.now();
-        responseBytes += chunk.length;
+        nonSseData += chunk.toString("utf8");
         response.write(chunk);
       });
       proxyRes.on("end", () => {
-        recordTelemetry();
+        if (proxyRes.statusCode >= 200 && proxyRes.statusCode < 300) {
+          try {
+            const j = JSON.parse(nonSseData);
+            if (j.usage) lastUsagePayload = j;
+            const text = j.choices?.[0]?.message?.content || "";
+            globalTelemetryCollector.completeRequest(reqId, { usagePayload: lastUsagePayload, finalText: text });
+          } catch {
+            globalTelemetryCollector.completeRequest(reqId, { finalText: nonSseData });
+          }
+        } else {
+          globalTelemetryCollector.failRequest(reqId, new Error(`HTTP ${proxyRes.statusCode}`));
+        }
         response.end();
       });
     }
   });
 
   proxyReq.on("error", (err) => {
+    globalTelemetryCollector.failRequest(reqId, err);
     if (!response.headersSent) {
       sendJson(response, 502, { error: { message: err.message, type: "bridge_proxy_error" } });
     }
@@ -3307,22 +3234,16 @@ function startAntigravityWatcher() {
         if (chars > 10) {
           const now = Date.now();
           const elapsedSec = Math.max((now - lastObservedTime) / 1000, 0.5);
-          const tokens = Math.max(Math.round(chars / 2.5), 2);
-          const rawTps = tokens / elapsedSec;
-          const tps = Math.min(Math.max(Math.round(rawTps * 10) / 10, 20.0), 120.0);
-          const ttft = Math.round(Math.min(elapsedSec * 250, 800));
+          const estimatedTokens = estimateOutputTokensFromText(newChunk);
+          const rawTps = Math.round((estimatedTokens / elapsedSec) * 10) / 10;
 
-          runtime.telemetry.totalRequests++;
-          runtime.telemetry.totalTokens += tokens;
-          runtime.telemetry.lastTokensPerSec = tps;
-          runtime.telemetry.lastTtftMs = ttft;
-          runtime.telemetry.avgTokensPerSec = runtime.telemetry.avgTokensPerSec > 0
-            ? Math.round(((runtime.telemetry.avgTokensPerSec * 0.6) + (tps * 0.4)) * 10) / 10
-            : tps;
-          runtime.telemetry.avgTtftMs = runtime.telemetry.avgTtftMs > 0
-            ? Math.round((runtime.telemetry.avgTtftMs * 0.6) + (ttft * 0.4))
-            : ttft;
-          runtime.telemetry.lastActivityAt = new Date().toISOString();
+          // 仅作为次级观测记录，绝不修改 canonical telemetry
+          runtime.antigravityObservation = {
+            lastObservedAt: new Date().toISOString(),
+            estimatedChars: chars,
+            estimatedTokens,
+            rawTps,
+          };
           lastObservedTime = now;
         }
       }
@@ -3335,6 +3256,13 @@ function startAntigravityWatcher() {
 
 export async function startServer() {
   await initialize();
+  mihomoRuntime.init({ runtime, settings: runtime.settings });
+  try {
+    await mihomoRuntime.recoverInterruptedMihomoActivation();
+    await mihomoRuntime.recoverEmbeddedMihomo();
+  } catch (err) {
+    addError("recovery", err);
+  }
   startAntigravityWatcher();
   const server = http.createServer((request, response) => requestHandler(request, response));
   await new Promise((resolve, reject) => {

@@ -4,12 +4,14 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export class MihomoManager {
+export class MihomoManager extends EventEmitter {
   constructor({ binDir = "bin", dataDir = ".data/mihomo" } = {}) {
+    super();
     this.binDir = binDir;
     this.dataDir = dataDir;
     this.process = null;
@@ -21,6 +23,7 @@ export class MihomoManager {
     this.controllerSecret = "";
     this.lastExitCode = null;
     this.lastError = "";
+    this.intentionalStop = false;
     this.logHistory = [];
   }
 
@@ -39,6 +42,7 @@ export class MihomoManager {
    */
   detectBinaryPath() {
     const candidates = [
+      path.join(this.dataDir, "bin", "mihomo.exe"),
       path.join(this.binDir, "mihomo.exe"),
       path.join(process.cwd(), "bin", "mihomo.exe"),
       path.join(process.cwd(), "core", "mihomo.exe"),
@@ -150,22 +154,69 @@ export class MihomoManager {
   }
 
   /**
+   * 等待 Mihomo 完整就绪：进程存活 + 所有 Listener 端口就绪 + Controller HTTP 2xx
+   */
+  async waitReady({ expectedPorts = [], timeoutMs = 8000 } = {}) {
+    const startTime = Date.now();
+    let lastPortChecks = [];
+    let controllerOk = false;
+
+    while (Date.now() - startTime < timeoutMs) {
+      if (!this.process || this.process.exitCode !== null) {
+        throw new Error("Mihomo 进程在等待就绪期间意外退出");
+      }
+
+      // 1. 检查 Listener 端口
+      if (expectedPorts.length > 0) {
+        lastPortChecks = await Promise.all(expectedPorts.map((p) => this.canConnect(p, 400)));
+      } else {
+        lastPortChecks = [true];
+      }
+
+      // 2. 检查 Controller API /version
+      try {
+        const ctrlRes = await this.requestController("/version", { timeoutMs: 800 });
+        controllerOk = Boolean(ctrlRes && ctrlRes.ok);
+      } catch {
+        controllerOk = false;
+      }
+
+      if (lastPortChecks.every(Boolean) && controllerOk) {
+        const readyCount = expectedPorts.length;
+        this.addLog(`✓ 内置 Mihomo 已完全就绪 (Listeners: ${readyCount}/${readyCount}, Controller: ready)`);
+        return true;
+      }
+
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    const failedPorts = expectedPorts.filter((p, i) => !lastPortChecks[i]);
+    const reasons = [];
+    if (failedPorts.length > 0) reasons.push(`端口未连通: ${failedPorts.join(", ")}`);
+    if (!controllerOk) reasons.push(`Controller (${this.controllerPort}) 未响应`);
+    throw new Error(`内置 Mihomo 启动就绪超时 (${timeoutMs}ms): ${reasons.join("; ")}`);
+  }
+
+  /**
    * 启动内置 Mihomo
    */
-  async start({ configPath, controllerPort = 19090, secret = "", expectedPorts = [] }) {
+  async start({ configPath, controllerPort = 19090, secret = "", expectedPorts = [], skipPreflight = false }) {
     const binPath = this.detectBinaryPath();
     if (!binPath) throw new Error("未找到内置 Mihomo 内核文件 (mihomo.exe)");
 
     // 1. 语法预检
-    const testRes = await this.testConfig(configPath);
-    if (!testRes.ok) {
-      throw new Error(`Mihomo 配置预检未通过:\n${testRes.error}`);
+    if (!skipPreflight) {
+      const testRes = await this.testConfig(configPath);
+      if (!testRes.ok) {
+        throw new Error(`Mihomo 配置预检未通过:\n${testRes.error}`);
+      }
     }
 
     // 2. 停止当前正在运行的本进程
     await this.stop();
 
     this.starting = true;
+    this.intentionalStop = false;
     this.controllerPort = controllerPort;
     this.controllerSecret = secret;
     this.activeConfigPath = configPath;
@@ -186,48 +237,46 @@ export class MihomoManager {
     this.startedAt = new Date().toISOString();
 
     child.on("exit", (code, signal) => {
-      this.addLog(`Mihomo 进程 (PID: ${this.pid}) 已退出 [code: ${code}, signal: ${signal}]`, "warn");
+      const wasIntentional = this.intentionalStop;
+      this.addLog(`Mihomo 进程 (PID: ${this.pid}) 已退出 [code: ${code}, signal: ${signal}, intentional: ${wasIntentional}]`, wasIntentional ? "info" : "warn");
       this.lastExitCode = code;
+      const oldPid = this.pid;
+
       if (this.process === child) {
         this.process = null;
         this.pid = null;
       }
+
+      if (wasIntentional) {
+        this.emit("stopped", { code, signal, pid: oldPid });
+      } else {
+        this.emit("unexpected-exit", { code, signal, pid: oldPid, configPath: this.activeConfigPath });
+      }
     });
 
-    // 3. 等待所有监听端口与 Controller 就绪 (最多等待 4 秒)
-    const portsToWait = [...expectedPorts];
-    let isReady = false;
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 200));
-      if (!this.process) break;
-
-      const portChecks = await Promise.all(portsToWait.map((p) => this.canConnect(p, 500)));
-      if (portChecks.every(Boolean)) {
-        isReady = true;
-        break;
-      }
-    }
-
-    this.starting = false;
-
-    if (!isReady || !this.process) {
+    try {
+      // 3. 等待所有监听端口与 Controller 就绪
+      await this.waitReady({ expectedPorts, timeoutMs: 8000 });
+      this.starting = false;
+      this.emit("started", { pid: this.pid, configPath, expectedPorts, controllerPort });
+      return {
+        ok: true,
+        pid: this.pid,
+        controllerPort: this.controllerPort,
+        expectedPorts,
+      };
+    } catch (err) {
+      this.starting = false;
       await this.stop();
-      throw new Error("内置 Mihomo 启动后端口监听超时，部分端口未能就绪");
+      throw err;
     }
-
-    this.addLog(`✓ 内置 Mihomo 已成功启动 (PID: ${this.pid})，${expectedPorts.length} 个独立通道端口已就绪`);
-    return {
-      ok: true,
-      pid: this.pid,
-      controllerPort: this.controllerPort,
-      expectedPorts,
-    };
   }
 
   /**
    * 安全停止当前 Mihomo 子进程（精准通过 PID 终止，绝不影响系统其他代理）
    */
   async stop() {
+    this.intentionalStop = true;
     const currentPid = this.pid;
     const proc = this.process;
 
@@ -252,7 +301,7 @@ export class MihomoManager {
   }
 
   /**
-   * 获取当前运行状态
+   * 获取当前运行状态（供 API / 仪表盘展示，安全脱敏）
    */
   getStatus() {
     return {

@@ -2043,7 +2043,7 @@ namespace AntigravityDesktopClient
                     var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
                     if (data == null) return;
 
-                    string curVer = data.ContainsKey("currentVersion") ? data["currentVersion"].ToString() : "0.2.2";
+                    string curVer = data.ContainsKey("currentVersion") ? data["currentVersion"].ToString() : "0.4.0";
                     string latVer = data.ContainsKey("latestVersion") ? data["latestVersion"].ToString() : curVer;
                     bool hasUpdate = data.ContainsKey("hasUpdate") && Convert.ToBoolean(data["hasUpdate"]);
                     string releaseUrl = data.ContainsKey("releaseUrl") ? data["releaseUrl"].ToString() : "https://github.com/yu-hx-tom/antigravity-bridge-codex/releases";
@@ -2497,6 +2497,8 @@ namespace AntigravityDesktopClient
             int avgTtft = 0;
             double lastTps = 0;
             int lastTtft = 0;
+            bool isEstimated = false;
+            string tokenSource = "api-usage";
 
             if (telemetry != null)
             {
@@ -2516,13 +2518,23 @@ namespace AntigravityDesktopClient
                 {
                     int.TryParse(telemetry["lastTtftMs"].ToString(), out lastTtft);
                 }
+                if (telemetry.ContainsKey("lastEstimated") && telemetry["lastEstimated"] != null)
+                {
+                    isEstimated = Convert.ToBoolean(telemetry["lastEstimated"]);
+                }
+                if (telemetry.ContainsKey("lastTokenSource") && telemetry["lastTokenSource"] != null)
+                {
+                    tokenSource = telemetry["lastTokenSource"].ToString();
+                }
             }
 
             if (avgTps > 0)
             {
-                txtMetricThroughput.Text = avgTps.ToString("0.0") + " t/s";
+                string prefix = isEstimated ? "~" : "";
+                string sourceLabel = tokenSource == "api-usage" ? "API usage (官方精确)" : "估算";
+                txtMetricThroughput.Text = prefix + avgTps.ToString("0.0") + " t/s";
                 txtMetricThroughput.Foreground = new SolidColorBrush(ColPrimary);
-                txtMetricThroughput.ToolTip = string.Format("会话全局加权均速: {0:0.0} t/s (最近单次: {1:0.0} t/s)", avgTps, lastTps);
+                txtMetricThroughput.ToolTip = string.Format("会话全局加权均速: {0}{1:0.0} t/s\n最近单次: {2:0.0} t/s\nToken 数据源: {3}", prefix, avgTps, lastTps, sourceLabel);
 
                 txtMetricLatency.Text = avgTtft.ToString() + " ms";
                 txtMetricLatency.Foreground = new SolidColorBrush(ColGreen);
