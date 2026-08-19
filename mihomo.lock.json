@@ -1,0 +1,9 @@
+{
+  "version": "1.19.30",
+  "assets": {
+    "windows-amd64": {
+      "filename": "mihomo-windows-amd64.exe",
+      "binary": "mihomo.exe"
+    }
+  }
+}

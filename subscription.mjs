@@ -93,6 +93,41 @@ export function scanLocalClashProfiles() {
   return bestNodes;
 }
 
+/**
+ * 查找并返回本地最完整的原始 Clash Profile YAML 文本内容
+ */
+export function findLocalRawProfileContent() {
+  const dirs = [
+    path.join(os.homedir(), "AppData", "Roaming", "com.follow", "clash", "profiles"),
+    path.join(os.homedir(), "AppData", "Roaming", "com.appshub", "XiyouYun", "profiles"),
+    path.join(os.homedir(), "AppData", "Roaming", "Clash for Windows", "profiles"),
+    path.join(os.homedir(), "AppData", "Roaming", "Clash Verge", "profiles"),
+    path.join(os.homedir(), "AppData", "Roaming", "clash-verge", "profiles"),
+    path.join(os.homedir(), "AppData", "Roaming", "clash-nyanpasu", "profiles"),
+    path.join(os.homedir(), ".config", "clash", "profiles"),
+  ];
+
+  let bestContent = "";
+  for (const d of dirs) {
+    if (fsSync.existsSync(d)) {
+      try {
+        const files = fsSync.readdirSync(d);
+        for (const f of files) {
+          if (f.endsWith(".yaml") || f.endsWith(".yml") || f.endsWith(".plain")) {
+            try {
+              const content = fsSync.readFileSync(path.join(d, f), "utf8");
+              if (content.includes("proxies:") && content.length > bestContent.length) {
+                bestContent = content;
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+  }
+  return bestContent;
+}
+
 export function extractSubscriptionUrlsFromPreferences(rawText) {
   try {
     const outer = JSON.parse(String(rawText || ""));

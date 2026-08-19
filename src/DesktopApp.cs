@@ -3593,7 +3593,7 @@ namespace AntigravityDesktopClient
                 Margin = new Thickness(0, 0, 0, 16)
             };
             StackPanel modeSp = new StackPanel();
-            modeSp.Children.Add(new TextBlock { Text = "01 选择网络工作模式", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 12) });
+            modeSp.Children.Add(new TextBlock { Text = "出海网络工作模式", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 12) });
 
             Grid modeGrid = new Grid();
             modeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -3782,7 +3782,7 @@ namespace AntigravityDesktopClient
             topSelGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             StackPanel summarySp = new StackPanel();
-            summarySp.Children.Add(new TextBlock { Text = "02.5 节点选择与智能优选", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
+            summarySp.Children.Add(new TextBlock { Text = "节点选择与智能优选", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
             txtNodeSelectorSummary = new TextBlock { Text = "已自动排除香港等受限地区，系统为您智能优选 5 个专线/高速节点：", FontSize = 12, Foreground = new SolidColorBrush(ColTextMuted) };
             summarySp.Children.Add(txtNodeSelectorSummary);
             Grid.SetColumn(summarySp, 0);
@@ -3790,7 +3790,7 @@ namespace AntigravityDesktopClient
 
             StackPanel quickBtnRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
 
-            Button btnPingCandidateNodes = CreateButton("⚡ 测试真实全链路", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11);
+            Button btnPingCandidateNodes = CreateButton("🔄 更新节点", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11);
             btnPingCandidateNodes.Padding = new Thickness(10, 4, 10, 4);
             btnPingCandidateNodes.Margin = new Thickness(0, 0, 6, 0);
             btnPingCandidateNodes.Click += (s, e) => PingAllCandidateNodes();
@@ -3835,57 +3835,13 @@ namespace AntigravityDesktopClient
             nodesScroll.Content = panelAvailableNodesList;
             nodeSelSp.Children.Add(nodesScroll);
 
-            // 3-Phase Activation Guided Action Bar
-            Border stepsCard = new Border
-            {
-                Background = new SolidColorBrush(isDarkMode ? System.Windows.Media.Color.FromArgb(30, 245, 158, 11) : System.Windows.Media.Color.FromArgb(20, 245, 158, 11)),
-                BorderBrush = new SolidColorBrush(ColAmber),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(12, 10, 12, 10),
-                Margin = new Thickness(0, 10, 0, 0)
-            };
-            StackPanel stepsSp = new StackPanel();
-
-            TextBlock txtStepsTitle = new TextBlock
-            {
-                Text = "⚡ 独立通道安全三步激活向导（防止内存覆盖与出口错位）",
-                FontWeight = FontWeights.Bold,
-                FontSize = 12,
-                Foreground = new SolidColorBrush(ColAmber),
-                Margin = new Thickness(0, 0, 0, 8)
-            };
-            stepsSp.Children.Add(txtStepsTitle);
-
-            Grid stepsBtnGrid = new Grid();
-            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
-            stepsBtnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            btnPreparePlan = CreateButton("① 🚀 生成待应用计划", ColPrimary, System.Windows.Media.Brushes.White, 11, true);
-            btnPreparePlan.Padding = new Thickness(8, 6, 8, 6);
-            btnPreparePlan.Click += (s, e) => PrepareSelectedNodesPlan();
-            btnConfirmSelectedNodes = btnPreparePlan;
-            Grid.SetColumn(btnPreparePlan, 0);
-            stepsBtnGrid.Children.Add(btnPreparePlan);
-
-            btnCommitPending = CreateButton("② 🔒 退出西游云后安全写入", ColCardMuted, new SolidColorBrush(ColTextMuted), 11, true);
-            btnCommitPending.Padding = new Thickness(8, 6, 8, 6);
-            btnCommitPending.Click += (s, e) => CommitPendingXiyouScriptAction();
-            Grid.SetColumn(btnCommitPending, 2);
-            stepsBtnGrid.Children.Add(btnCommitPending);
-
-            btnVerifyActivation = CreateButton("③ 🔍 启动西游云后验证出口", ColCardMuted, new SolidColorBrush(ColTextMuted), 11, true);
-            btnVerifyActivation.Padding = new Thickness(8, 6, 8, 6);
-            btnVerifyActivation.Click += (s, e) => VerifyPendingActivationAction();
-            Grid.SetColumn(btnVerifyActivation, 4);
-            stepsBtnGrid.Children.Add(btnVerifyActivation);
-
-            stepsSp.Children.Add(stepsBtnGrid);
-            stepsCard.Child = stepsSp;
-            nodeSelSp.Children.Add(stepsCard);
+            // Embedded Standalone Mihomo Dedicated Action Bar
+            btnConfirmSelectedNodes = CreateButton("⚡ 立即一键激活独立通道 (已选 0 个)", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
+            btnConfirmSelectedNodes.Padding = new Thickness(14, 10, 14, 10);
+            btnConfirmSelectedNodes.Margin = new Thickness(0, 8, 0, 0);
+            btnConfirmSelectedNodes.HorizontalAlignment = HorizontalAlignment.Stretch;
+            btnConfirmSelectedNodes.Click += (s, e) => ActivateEmbeddedStandaloneNetwork();
+            nodeSelSp.Children.Add(btnConfirmSelectedNodes);
 
             cardNodeSelector.Child = nodeSelSp;
             body.Children.Add(cardNodeSelector);
@@ -3905,7 +3861,7 @@ namespace AntigravityDesktopClient
             chHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             chHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            chHeader.Children.Add(new TextBlock { Text = "03 已就绪的专属独立出口通道", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center });
+            chHeader.Children.Add(new TextBlock { Text = "专属独立出口通道", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), VerticalAlignment = VerticalAlignment.Center });
 
             Button btnPingEgress = CreateButton("🔄 测试通道延迟", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11);
             btnPingEgress.Padding = new Thickness(10, 4, 10, 4);
@@ -4294,8 +4250,21 @@ namespace AntigravityDesktopClient
                     CornerRadius = new CornerRadius(4),
                     Padding = new Thickness(5, 1, 5, 1)
                 };
-                string latText = latency > 0 ? string.Format("{0} {1}ms", latencyLabel, latency) : (latency < 0 ? latencyLabel + " 超时" : latencyLabel);
-                System.Windows.Media.Color latCol = latency > 0 ? (latency < 150 ? ColGreen : ColAmber) : (latency < 0 ? ColRed : ColTextMuted);
+                string cleanPrefix = latencyLabel.Replace(latency.ToString() + "ms", "").Replace(latency.ToString() + " ms", "").Replace("ms", "").Trim();
+                if (string.IsNullOrEmpty(cleanPrefix)) cleanPrefix = "延迟";
+                string latText;
+                System.Windows.Media.Color latCol;
+                if (latency > 0)
+                {
+                    latText = string.Format("{0} {1}ms", cleanPrefix, latency);
+                    latCol = latency < 150 ? ColGreen : ColAmber;
+                }
+                else
+                {
+                    latText = "未激活";
+                    latCol = ColTextMuted;
+                }
+                
                 latPill.Child = new TextBlock { Text = latText, FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(latCol) };
                 Grid.SetColumn(latPill, 1);
                 botL.Children.Add(latPill);
@@ -4438,12 +4407,76 @@ namespace AntigravityDesktopClient
             }
             if (btnPreparePlan != null)
             {
-                btnPreparePlan.Content = string.Format("① 🚀 生成待应用计划 (已选 {0} 个)", selectedCount);
+                btnConfirmSelectedNodes.Content = string.Format("⚡ 立即一键激活独立通道 (已选 {0} 个)", selectedCount);
             }
             else if (btnConfirmSelectedNodes != null)
             {
-                btnConfirmSelectedNodes.Content = string.Format("① 🚀 生成待应用计划 (已选 {0} 个)", selectedCount);
+                btnConfirmSelectedNodes.Content = string.Format("⚡ 立即一键激活独立通道 (已选 {0} 个)", selectedCount);
             }
+        }
+
+        
+        private void ActivateEmbeddedStandaloneNetwork()
+        {
+            List<Dictionary<string, object>> selectedList = new List<Dictionary<string, object>>();
+            for (int i = 0; i < nodeCheckBoxes.Count; i++)
+            {
+                if (nodeCheckBoxes[i].IsChecked == true && i < currentFetchedNodes.Count)
+                {
+                    selectedList.Add(currentFetchedNodes[i]);
+                }
+            }
+
+            if (selectedList.Count == 0)
+            {
+                MessageBox.Show("请至少勾选 1 个可用节点后再激活独立通道！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string subUrl = txtProxySubUrl != null ? txtProxySubUrl.Text.Trim() : "";
+            txtProxySyncStatus.Text = string.Format("⚡ 正在启动内置独立 Mihomo 内核并一键就绪 {0} 个独立通道...", selectedList.Count);
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+            if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = false;
+
+            var requestPayload = new Dictionary<string, object>();
+            requestPayload["selectedNodes"] = selectedList;
+            requestPayload["subscriptionUrl"] = subUrl;
+            requestPayload["customNodes"] = customSingleNodes;
+            string reqBody = jsonSerializer.Serialize(requestPayload);
+
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/activate-embedded", reqBody);
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    var activePlan = dict != null && dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
+                    string msg = dict != null && dict.ContainsKey("message") ? dict["message"].ToString() : "内置专向内核已成功就绪";
+
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
+                        currentActivationState = "active";
+                        currentActiveEgressPlanList = activePlan;
+                        currentEgressPlanList = activePlan;
+                        txtProxySyncStatus.Text = msg;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                        RenderEgressPlanCards(activePlan);
+                        ShowToast("✓ 内置专向内核已启动，独立通道已完全解锁！");
+                        PingAllCandidateNodes();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
+                        txtProxySyncStatus.Text = "⚠️ 启动内置内核失败: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        MessageBox.Show(ex.Message, "独立内核启动提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    });
+                }
+            });
         }
 
         private void PrepareSelectedNodesPlan()

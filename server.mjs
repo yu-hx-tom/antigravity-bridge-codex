@@ -51,7 +51,10 @@ import {
   computeNodeFingerprint,
   patchXiyouPreferences,
   inspectXiyouPreferences,
+  findLocalRawProfileContent,
 } from "./subscription.mjs";
+import { compileMihomoConfig, parseMihomoSource } from "./mihomo-config.mjs";
+import { globalMihomoManager } from "./mihomo-manager.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -1693,6 +1696,212 @@ export async function verifyPendingActivation() {
   };
 }
 
+/**
+ * V0.4：内置独立 Mihomo 事务化一键激活 (Candidate -> Preflight -> Start -> Verify -> Promote / Rollback)
+ */
+export async function activateEmbeddedMihomoNetwork(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
+  const netSettings = { ...(runtime.settings.networkSettings || {}) };
+  if (forceUrl !== null) netSettings.subscriptionUrl = String(forceUrl).trim();
+  if (forceCustomIsp !== null) netSettings.customIspText = String(forceCustomIsp).trim();
+  if (forceCustomNodes !== null) netSettings.customNodes = forceCustomNodes;
+  netSettings.mode = "isolated";
+  netSettings.backend = "embedded-mihomo";
+
+  let nodesToApply = selectedNodes;
+  if (!nodesToApply || nodesToApply.length === 0) {
+    const fetched = await fetchSubscriptionCandidateNodes(netSettings.subscriptionUrl, netSettings.customIspText, null, netSettings.customNodes);
+    nodesToApply = fetched.nodes.filter((n) => n.recommended);
+  }
+  if (nodesToApply.length === 0) throw new Error("没有可激活的真实节点");
+
+  let relay = selectSingaporeRelay([...nodesToApply, ...runtime.candidateNodes]);
+  if (nodesToApply.some((node) => node.isCustomIsp) && !relay) {
+    try {
+      const fetched = await fetchSubscriptionCandidateNodes(
+        netSettings.subscriptionUrl,
+        netSettings.customIspText,
+        null,
+        netSettings.customNodes,
+      );
+      relay = selectSingaporeRelay(fetched.nodes);
+    } catch {}
+  }
+  if (nodesToApply.some((node) => node.isCustomIsp) && !relay) {
+    throw new Error("住宅 ISP 必须经过新加坡专线，但当前节点列表中没有找到新加坡 IEPL/IPLC/专线节点");
+  }
+
+  const previousPlan = netSettings.egressPlan || runtime.egressPlan || [];
+  const egressPlan = buildPlanFromSelectedNodes(nodesToApply, 7892, {
+    relayNodeName: relay?.name || "",
+    previousPlan,
+  });
+
+  // 1. 获取 Source of Truth (完整供应商配置底版)
+  let sourceText = "";
+  if (netSettings.subscriptionUrl) {
+    try {
+      sourceText = await fetchSubscriptionRawText(netSettings.subscriptionUrl);
+    } catch {}
+  }
+  if (!sourceText) {
+    sourceText = findLocalRawProfileContent();
+  }
+  if (!sourceText) {
+    throw new Error("无法获取完整的源订阅配置 (Source of Truth)，请先输入有效订阅链接或扫描本地配置文件");
+  }
+
+  // 2. 编译 Candidate 配置
+  const mihomoDir = path.join(DATA_DIR, "mihomo");
+  const compiledDir = path.join(mihomoDir, "compiled");
+  await fs.mkdir(compiledDir, { recursive: true });
+
+  const candidatePath = path.join(compiledDir, "candidate.yaml");
+  const activePath = path.join(compiledDir, "active.yaml");
+  const previousPath = path.join(compiledDir, "previous.yaml");
+
+  const controllerPort = 19090;
+  const secret = randomKey("sec");
+
+  const { compiledText, configHash, expectedPorts } = compileMihomoConfig({
+    sourceText,
+    egressPlan,
+    controllerPort,
+    secret,
+    singaporeRelayName: relay?.name || "",
+  });
+
+  await fs.writeFile(candidatePath, compiledText, "utf8");
+
+  // 3. 语法预检 mihomo.exe -t
+  const testRes = await globalMihomoManager.testConfig(candidatePath);
+  if (!testRes.ok) {
+    throw new Error(`Mihomo 配置预检未通过:\n${testRes.error}`);
+  }
+
+  // 4. 备份当前 active 配置到 previous
+  if (fsSync.existsSync(activePath)) {
+    try { await fs.copyFile(activePath, previousPath); } catch {}
+  }
+  await fs.copyFile(candidatePath, activePath);
+
+  // 5. 启动独立内核并等待端口
+  addLog("network", `正在启动内置独立 Mihomo 内核 (管理 ${expectedPorts.length} 个独立通道)...`);
+  try {
+    await globalMihomoManager.start({
+      configPath: activePath,
+      controllerPort,
+      secret,
+      expectedPorts,
+    });
+  } catch (startErr) {
+    // 启动失败，尝试回滚至 previous.yaml
+    if (fsSync.existsSync(previousPath)) {
+      try {
+        await fs.copyFile(previousPath, activePath);
+        await globalMihomoManager.start({
+          configPath: activePath,
+          controllerPort,
+          secret,
+          expectedPorts: previousPlan.map((p) => Number(p.port)),
+        });
+        addLog("network", "新配置启动失败，已成功自动回滚至上一稳定版本", "warn");
+      } catch {}
+    }
+    throw new Error(`内置 Mihomo 启动失败: ${startErr.message}`);
+  }
+
+  // 6. 物理核验真实出口
+  const regionExpectedCode = {
+    "台湾": "TW",
+    "新加坡": "SG",
+    "美国": "US",
+    "日本": "JP",
+    "韩国": "KR",
+    "英国": "GB",
+    "德国": "DE",
+    "法国": "FR",
+    "加拿大": "CA",
+    "澳大利亚": "AU",
+  };
+
+  const verifiedPlan = [];
+  const verificationErrors = [];
+
+  for (const item of egressPlan) {
+    const port = Number(item.port);
+    const targetRegion = item.region || "";
+    const expectedCode = regionExpectedCode[targetRegion] || null;
+
+    let probeResult = await probeProxyEgressGeo(port, 4000);
+    if (!probeResult.ok) {
+      await new Promise((r) => setTimeout(r, 600));
+      probeResult = await probeProxyEgressGeo(port, 4000);
+    }
+
+    if (!probeResult.ok) {
+      verificationErrors.push(`端口 ${port} (${item.proxyName}) 端到端连接失败: ${probeResult.error}`);
+      verifiedPlan.push({
+        ...item,
+        verified: false,
+        realGeo: null,
+        error: probeResult.error,
+      });
+      continue;
+    }
+
+    const realCode = String(probeResult.countryCode || "").toUpperCase();
+    if (expectedCode && realCode !== expectedCode && !item.isCustomIsp) {
+      verificationErrors.push(`端口 ${port} 预期出口地区为 [${expectedCode} / ${targetRegion}]，但物理实测为 [${realCode} / ${probeResult.country}]`);
+    }
+
+    verifiedPlan.push({
+      ...item,
+      verified: true,
+      realGeo: {
+        ip: probeResult.ip,
+        countryCode: realCode,
+        country: probeResult.country,
+        region: probeResult.region,
+        isp: probeResult.isp,
+      },
+    });
+  }
+
+  const successCount = verifiedPlan.filter((p) => p.verified).length;
+  if (successCount === 0 && egressPlan.length > 0) {
+    throw new Error(`全部门户通道出口物理验证未通过:\n${verificationErrors.join("\n")}`);
+  }
+
+  const generationId = randomKey("gen");
+  netSettings.egressPlan = verifiedPlan;
+  netSettings.pendingEgressPlan = [];
+  netSettings.selectedNodes = nodesToApply;
+  netSettings.relayNodeName = relay?.name || "";
+  netSettings.activation = {
+    state: "active",
+    generationId,
+    configHash,
+    expectedPorts,
+    verifiedAt: new Date().toISOString(),
+    failure: verificationErrors.join("; "),
+  };
+
+  runtime.settings.networkSettings = netSettings;
+  runtime.egressPlan = verifiedPlan;
+  await saveSettings();
+
+  addLog("network", `✓ 内置专向 Mihomo 内核已成功就绪！${successCount}/${egressPlan.length} 个独立通道已完全解锁`);
+
+  return {
+    ok: true,
+    state: "active",
+    generationId,
+    egressPlan: publicEgressPlan(verifiedPlan),
+    configHash,
+    message: `✓ 内置专向独立内核已启动！${successCount} 个独立通道已通过出口物理验证`,
+  };
+}
+
 export async function applySelectedNodes(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
   return prepareSelectedNodes(selectedNodes, forceUrl, forceCustomIsp, forceCustomNodes);
 }
@@ -2690,6 +2899,14 @@ async function handleApi(request, response, url) {
   } else if (key === "POST /api/network/prepare-plan" || key === "POST /api/network/apply-nodes") {
     const body = await readBody(request).catch(() => ({}));
     result = await prepareSelectedNodes(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
+  } else if (key === "POST /api/network/activate-embedded") {
+    const body = await readBody(request).catch(() => ({}));
+    result = await activateEmbeddedMihomoNetwork(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
+  } else if (key === "GET /api/mihomo/status") {
+    result = globalMihomoManager.getStatus();
+  } else if (key === "POST /api/mihomo/stop") {
+    await globalMihomoManager.stop();
+    result = { ok: true, status: "stopped" };
   } else if (key === "POST /api/network/commit-pending") {
     result = await commitPendingXiyouScript();
   } else if (key === "POST /api/network/verify-activation") {
@@ -3158,6 +3375,9 @@ export async function startServer() {
         addError("core", error);
       }
     }
+    try {
+      await globalMihomoManager.stop();
+    } catch {}
     server.close();
   };
   process.once("SIGINT", () => void shutdown());

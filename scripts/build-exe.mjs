@@ -49,6 +49,9 @@ const appFiles = [
   "transaction.mjs",
   "history.mjs",
   "subscription.mjs",
+  "mihomo-config.mjs",
+  "mihomo-manager.mjs",
+  "mihomo.lock.json",
   "package.json",
   "cliproxy.lock.json",
   "launch-codex-api-service.ps1",
@@ -59,6 +62,20 @@ for (const file of appFiles) {
   if (fsSync.existsSync(src)) {
     await fs.copyFile(src, path.join(APP_DIR, file));
   }
+}
+
+// Copy node_modules (yaml)
+const nodeModulesSrc = path.join(ROOT, "node_modules");
+const nodeModulesDest = path.join(APP_DIR, "node_modules");
+if (fsSync.existsSync(nodeModulesSrc)) {
+  await fs.cp(nodeModulesSrc, nodeModulesDest, { recursive: true });
+}
+
+// Copy bin/ (mihomo.exe)
+const binSrc = path.join(ROOT, "bin");
+const binDest = path.join(APP_DIR, "bin");
+if (fsSync.existsSync(binSrc)) {
+  await fs.cp(binSrc, binDest, { recursive: true });
 }
 
 // 4. Compile Native Desktop GUI Cockpit .EXE (WPF Native Window)
