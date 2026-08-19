@@ -155,9 +155,17 @@ export class TelemetryCollector {
     req.totalDurationMs = Math.max(0, req.completedAt - req.startedAt);
     req.generationMs = Math.max(0, req.completedAt - req.firstOutputAt);
 
+    if (req.ttftMs === null) {
+      req.ttftMs = Math.max(0, Math.round(req.totalDurationMs * 10) / 10);
+    }
+
     const genSeconds = req.generationMs / 1000;
+    const durSeconds = req.totalDurationMs / 1000;
+
     if (genSeconds > 0 && req.outputTokens > 0) {
       req.tokensPerSec = Math.round((req.outputTokens / genSeconds) * 10) / 10;
+    } else if (durSeconds > 0 && req.outputTokens > 0) {
+      req.tokensPerSec = Math.round((req.outputTokens / durSeconds) * 10) / 10;
     } else {
       req.tokensPerSec = null;
     }

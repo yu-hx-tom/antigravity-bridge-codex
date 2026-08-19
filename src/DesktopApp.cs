@@ -2554,17 +2554,21 @@ namespace AntigravityDesktopClient
                 }
             }
 
-            if (avgTps > 0)
+            double displayTps = avgTps > 0 ? avgTps : lastTps;
+            int displayTtft = avgTtft > 0 ? avgTtft : lastTtft;
+
+            if (displayTps > 0 || displayTtft > 0)
             {
                 string prefix = isEstimated ? "~" : "";
                 string sourceLabel = tokenSource == "api-usage" ? "API usage (官方精确)" : "估算";
-                txtMetricThroughput.Text = prefix + avgTps.ToString("0.0") + " t/s";
-                txtMetricThroughput.Foreground = new SolidColorBrush(ColPrimary);
-                txtMetricThroughput.ToolTip = string.Format("会话全局加权均速: {0}{1:0.0} t/s\n最近单次: {2:0.0} t/s\nToken 数据源: {3}", prefix, avgTps, lastTps, sourceLabel);
+                string modeHint = avgTps > 0 ? "会话全局加权均速" : "单次生成测速";
+                txtMetricThroughput.Text = (displayTps > 0 ? (prefix + displayTps.ToString("0.0") + " t/s") : "-- t/s");
+                txtMetricThroughput.Foreground = new SolidColorBrush(displayTps > 0 ? ColPrimary : ColTextMuted);
+                txtMetricThroughput.ToolTip = string.Format("当前指标: {0}\n全局加权均速: {1:0.0} t/s\n最近单次测速: {2:0.0} t/s\nToken 数据源: {3}", modeHint, avgTps, lastTps, sourceLabel);
 
-                txtMetricLatency.Text = avgTtft.ToString() + " ms";
-                txtMetricLatency.Foreground = new SolidColorBrush(ColGreen);
-                txtMetricLatency.ToolTip = string.Format("会话平均首字延迟: {0} ms (最近单次: {1} ms)", avgTtft, lastTtft);
+                txtMetricLatency.Text = (displayTtft > 0 ? (displayTtft.ToString() + " ms") : "-- ms");
+                txtMetricLatency.Foreground = new SolidColorBrush(displayTtft > 0 ? ColGreen : ColTextMuted);
+                txtMetricLatency.ToolTip = string.Format("会话平均首字延迟: {0} ms (最近单次: {1} ms)", avgTtft > 0 ? avgTtft.ToString() : "--", lastTtft > 0 ? lastTtft.ToString() : "--");
             }
             else
             {

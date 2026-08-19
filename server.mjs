@@ -3047,12 +3047,17 @@ async function handleV1Proxy(request, response, url) {
       let buffer = "";
       proxyRes.on("data", (chunk) => {
         const text = chunk.toString("utf8");
+
+        // 收到首个非空非DONE数据块时立即标记 TTFT
+        if (text.includes("data:") && !text.includes("[DONE]")) {
+          globalTelemetryCollector.markFirstOutput(reqId);
+        }
         
-        // 提取文本 delta
-        const deltas = text.match(/"content"\s*:\s*"((?:\\.|[^"\\])*)"/g);
+        // 提取流式文本增量 (支持 OpenAI delta.content, delta.text, Responses output 等)
+        const deltas = text.match(/"(?:content|text)"\s*:\s*"((?:\\.|[^"\\])*)"/g);
         if (deltas) {
           for (const d of deltas) {
-            const m = d.match(/"content"\s*:\s*"((?:\\.|[^"\\])*)"/);
+            const m = d.match(/"(?:content|text)"\s*:\s*"((?:\\.|[^"\\])*)"/);
             if (m && m[1]) {
               try {
                 const unescaped = JSON.parse(`"${m[1]}"`);
