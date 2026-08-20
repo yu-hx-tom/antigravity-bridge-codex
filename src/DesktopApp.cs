@@ -236,18 +236,15 @@ namespace AntigravityDesktopClient
         private System.Windows.Shapes.Ellipse quotaTrack;
         private System.Windows.Shapes.Path pathQuotaArc;
         private TextBlock txtQuotaPercent;
-        private TextBlock txtTps;
-        private TextBlock txtTtft;
-        private TextBlock dividerBlock;
-        private System.Windows.Shapes.Path iconBolt;
-        private System.Windows.Shapes.Path iconTimer;
+        private TextBlock txtQuotaLabel;
+        private TextBlock txtWeeklyText;
         private bool isDockedLeft = false;
         private bool isDockedRight = false;
         private bool isDragging = false;
         private bool isDarkTheme = false;
-        private double lastTps = 0;
-        private int lastTtft = 0;
         private int lastQuota5h = -1;
+        private int lastQuotaWeekly = -1;
+        private string lastAccountEmail = "";
         private System.Windows.Controls.MenuItem miModelsSubmenu;
 
         public Action OpenMainWindowAction;
@@ -263,8 +260,8 @@ namespace AntigravityDesktopClient
             Background = System.Windows.Media.Brushes.Transparent;
             Topmost = true;
             ShowInTaskbar = false;
-            Width = 210;
-            Height = 40;
+            Width = 120;
+            Height = 38;
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
             TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
@@ -274,38 +271,37 @@ namespace AntigravityDesktopClient
             pillBorder = new Border
             {
                 BorderThickness = new Thickness(1.2),
-                CornerRadius = new CornerRadius(20),
-                Padding = new Thickness(4, 0, 10, 0),
+                CornerRadius = new CornerRadius(19),
+                Padding = new Thickness(4, 0, 8, 0),
                 Cursor = Cursors.SizeAll
             };
 
             Grid mainGrid = new Grid();
-            mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(38) });
+            mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) });
             mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            // 1. Single 5-Hour Quota Circular Ring (Left)
+            // 1. Quota Circular Ring (Left)
             circleCanvas = new Canvas
             {
-                Width = 34,
-                Height = 34,
+                Width = 28,
+                Height = 28,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = "当前生效账号的 5 小时短期可用额度百分比"
+                VerticalAlignment = VerticalAlignment.Center
             };
 
             quotaTrack = new System.Windows.Shapes.Ellipse
             {
-                Width = 28,
-                Height = 28,
-                StrokeThickness = 2.2
+                Width = 24,
+                Height = 24,
+                StrokeThickness = 2.0
             };
-            Canvas.SetLeft(quotaTrack, 3);
-            Canvas.SetTop(quotaTrack, 3);
+            Canvas.SetLeft(quotaTrack, 2);
+            Canvas.SetTop(quotaTrack, 2);
             circleCanvas.Children.Add(quotaTrack);
 
             pathQuotaArc = new System.Windows.Shapes.Path
             {
-                StrokeThickness = 2.5,
+                StrokeThickness = 2.3,
                 StrokeLineJoin = PenLineJoin.Round,
                 StrokeStartLineCap = PenLineCap.Round,
                 StrokeEndLineCap = PenLineCap.Round
@@ -315,90 +311,46 @@ namespace AntigravityDesktopClient
             txtQuotaPercent = new TextBlock
             {
                 Text = "--%",
-                FontSize = 8.8,
+                FontSize = 8.2,
                 FontWeight = FontWeights.Bold,
-                Width = 34,
+                Width = 28,
                 TextAlignment = TextAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
             Canvas.SetLeft(txtQuotaPercent, 0);
-            Canvas.SetTop(txtQuotaPercent, 10.5);
+            Canvas.SetTop(txtQuotaPercent, 7.5);
             circleCanvas.Children.Add(txtQuotaPercent);
 
             Grid.SetColumn(circleCanvas, 0);
             mainGrid.Children.Add(circleCanvas);
 
-            // 2. Telemetry Section (Right)
-            Grid metricsGrid = new Grid { VerticalAlignment = VerticalAlignment.Center };
-            metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            // TPS Column
-            StackPanel spTps = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-
-            iconBolt = new System.Windows.Shapes.Path
+            // 2. Right Text Column (5H & Weekly)
+            StackPanel spText = new StackPanel
             {
-                Data = Geometry.Parse("M 4.5 0 L 0.5 6.5 L 4 6.5 L 3 11.5 L 8.5 4.5 L 5 4.5 Z"),
-                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(251, 191, 36)),
-                Width = 8,
-                Height = 11,
-                Stretch = Stretch.Uniform,
-                Margin = new Thickness(0, 0, 4, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            spTps.Children.Add(iconBolt);
-
-            txtTps = new TextBlock
-            {
-                Text = "-- t/s",
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            spTps.Children.Add(txtTps);
-            Grid.SetColumn(spTps, 0);
-            metricsGrid.Children.Add(spTps);
-
-            // Divider
-            dividerBlock = new TextBlock
-            {
-                Text = "|",
-                FontSize = 9.5,
+                Orientation = Orientation.Vertical,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(3, 0, 3, 0)
+                Margin = new Thickness(3, 0, 0, 0)
             };
-            Grid.SetColumn(dividerBlock, 1);
-            metricsGrid.Children.Add(dividerBlock);
 
-            // TTFT Column
-            StackPanel spTtft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-
-            iconTimer = new System.Windows.Shapes.Path
+            txtQuotaLabel = new TextBlock
             {
-                Data = Geometry.Parse("M 4 0 L 7 0 L 7 1.2 L 4 1.2 Z M 5.5 1.8 C 2.5 1.8 0 4.3 0 7.3 C 0 10.3 2.5 12.8 5.5 12.8 C 8.5 12.8 11 10.3 11 7.3 C 11 4.3 8.5 1.8 5.5 1.8 Z M 5.5 3 C 7.9 3 9.8 4.9 9.8 7.3 C 9.8 9.7 7.9 11.6 5.5 11.6 C 3.1 11.6 1.2 9.7 1.2 7.3 C 1.2 4.9 3.1 3 5.5 3 Z M 4.8 4.2 L 4.8 7.5 L 7.5 8.8 L 8 7.7 L 6 6.7 L 6 4.2 Z"),
-                Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(52, 211, 153)),
-                Width = 9,
-                Height = 11,
-                Stretch = Stretch.Uniform,
-                Margin = new Thickness(0, 0, 4, 0),
-                VerticalAlignment = VerticalAlignment.Center
+                Text = "5H 额度",
+                FontSize = 8.5,
+                FontWeight = FontWeights.Normal
             };
-            spTtft.Children.Add(iconTimer);
+            spText.Children.Add(txtQuotaLabel);
 
-            txtTtft = new TextBlock
+            txtWeeklyText = new TextBlock
             {
-                Text = "-- ms",
-                FontSize = 11,
+                Text = "周: --%",
+                FontSize = 10.0,
                 FontWeight = FontWeights.Bold,
-                VerticalAlignment = VerticalAlignment.Center
+                Margin = new Thickness(0, 0.5, 0, 0)
             };
-            spTtft.Children.Add(txtTtft);
-            Grid.SetColumn(spTtft, 2);
-            metricsGrid.Children.Add(spTtft);
+            spText.Children.Add(txtWeeklyText);
 
-            Grid.SetColumn(metricsGrid, 1);
-            mainGrid.Children.Add(metricsGrid);
+            Grid.SetColumn(spText, 1);
+            mainGrid.Children.Add(spText);
 
             pillBorder.Child = mainGrid;
             Content = pillBorder;
@@ -590,22 +542,17 @@ namespace AntigravityDesktopClient
                     txtQuotaPercent.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(248, 250, 252) : System.Windows.Media.Color.FromRgb(15, 23, 42));
                 }
 
-                if (dividerBlock != null)
+                if (txtQuotaLabel != null)
                 {
-                    dividerBlock.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromArgb(120, 71, 85, 105) : System.Windows.Media.Color.FromArgb(140, 203, 213, 225));
+                    txtQuotaLabel.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(100, 116, 139));
                 }
 
-                if (iconBolt != null)
+                if (txtWeeklyText != null)
                 {
-                    iconBolt.Fill = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(251, 191, 36) : System.Windows.Media.Color.FromRgb(217, 119, 6));
+                    txtWeeklyText.Foreground = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(241, 245, 249) : System.Windows.Media.Color.FromRgb(30, 41, 59));
                 }
 
-                if (iconTimer != null)
-                {
-                    iconTimer.Fill = new SolidColorBrush(isDark ? System.Windows.Media.Color.FromRgb(52, 211, 153) : System.Windows.Media.Color.FromRgb(5, 150, 105));
-                }
-
-                UpdateData(lastTps, lastTtft, lastQuota5h);
+                UpdateData(lastQuota5h, lastQuotaWeekly, lastAccountEmail);
             });
         }
 
@@ -676,46 +623,19 @@ namespace AntigravityDesktopClient
             BeginAnimation(Window.OpacityProperty, anim);
         }
 
-        public void UpdateTelemetry(double tps, int ttft)
+        public void UpdateData(int quota5h, int quotaWeekly = -1, string accountEmail = "")
         {
-            UpdateData(tps, ttft, lastQuota5h);
-        }
-
-        public void UpdateData(double tps, int ttft, int quota5h)
-        {
-            lastTps = tps;
-            lastTtft = ttft;
             lastQuota5h = quota5h;
+            lastQuotaWeekly = quotaWeekly;
+            lastAccountEmail = accountEmail;
 
             Dispatcher.Invoke((Action)delegate
             {
-                if (tps > 0)
-                {
-                    txtTps.Text = string.Format("{0:0.0} t/s", tps);
-                    txtTps.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(56, 189, 248) : System.Windows.Media.Color.FromRgb(37, 99, 235));
-                }
-                else
-                {
-                    txtTps.Text = "-- t/s";
-                    txtTps.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(100, 116, 139));
-                }
-
-                if (ttft > 0)
-                {
-                    txtTtft.Text = string.Format("{0} ms", ttft);
-                    txtTtft.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(52, 211, 153) : System.Windows.Media.Color.FromRgb(5, 150, 105));
-                }
-                else
-                {
-                    txtTtft.Text = "-- ms";
-                    txtTtft.Foreground = new SolidColorBrush(isDarkTheme ? System.Windows.Media.Color.FromRgb(148, 163, 184) : System.Windows.Media.Color.FromRgb(100, 116, 139));
-                }
-
                 // Update 5-Hour Quota Single Ring
                 if (quota5h >= 0)
                 {
                     double hAngle = Math.Min(quota5h, 100) * 359.9 / 100.0;
-                    pathQuotaArc.Data = CreateArcGeometry(17, 17, 14, 0, Math.Max(hAngle, 1.0));
+                    pathQuotaArc.Data = CreateArcGeometry(14, 14, 12, 0, Math.Max(hAngle, 1.0));
                     pathQuotaArc.Stroke = (quota5h >= 50)
                         ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(6, 182, 212)) // Cyan
                         : ((quota5h >= 20)
@@ -723,14 +643,29 @@ namespace AntigravityDesktopClient
                             : new SolidColorBrush(System.Windows.Media.Color.FromRgb(244, 63, 94))); // Rose
 
                     txtQuotaPercent.Text = quota5h + "%";
-                    txtQuotaPercent.FontSize = (quota5h == 100) ? 7.8 : 8.8;
+                    txtQuotaPercent.FontSize = (quota5h == 100) ? 7.2 : 8.2;
                 }
                 else
                 {
                     pathQuotaArc.Data = null;
                     txtQuotaPercent.Text = "--%";
-                    txtQuotaPercent.FontSize = 8.2;
+                    txtQuotaPercent.FontSize = 8.0;
                 }
+
+                if (quotaWeekly >= 0)
+                {
+                    txtWeeklyText.Text = string.Format("周: {0}%", quotaWeekly);
+                }
+                else
+                {
+                    txtWeeklyText.Text = "周: --%";
+                }
+
+                string emailHint = string.IsNullOrEmpty(accountEmail) ? "默认账号" : accountEmail;
+                ToolTip = string.Format("当前生效账号: {0}\n5 小时短期可用额度: {1}%\n每周总可用额度: {2}\n\n(双击打开主窗口，右键切换模型/设置)",
+                    emailHint,
+                    quota5h >= 0 ? quota5h.ToString() : "--",
+                    quotaWeekly >= 0 ? quotaWeekly.ToString() + "%" : "未限制");
             });
         }
     }
@@ -766,8 +701,8 @@ namespace AntigravityDesktopClient
         private TextBlock txtCodexStatus;
         private TextBlock txtMetricCore;
         private TextBlock txtMetricAccounts;
-        private TextBlock txtMetricThroughput;
-        private TextBlock txtMetricLatency;
+        private TextBlock txtMetric5hQuota;
+        private TextBlock txtMetricWeeklyQuota;
         private Border badgeMode;
         private TextBlock txtMode;
         private Border toastContainer;
@@ -1056,7 +991,7 @@ namespace AntigravityDesktopClient
             trayModelsMenu.DropDownItems.Add(new System.Windows.Forms.ToolStripMenuItem("正在同步模型列表...", null, (s, e) => { }));
             trayContextMenu.Items.Add(trayModelsMenu);
 
-            trayHudMenu = new System.Windows.Forms.ToolStripMenuItem((showFloatingHud ? "✓ " : "    ") + "桌面测速悬浮窗", null, (s, e) => ToggleFloatingHud(!showFloatingHud)) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) };
+            trayHudMenu = new System.Windows.Forms.ToolStripMenuItem((showFloatingHud ? "✓ " : "    ") + "桌面额度悬浮窗", null, (s, e) => ToggleFloatingHud(!showFloatingHud)) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) };
             trayContextMenu.Items.Add(trayHudMenu);
 
             trayContextMenu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("⚙️ 偏好设置", null, (s, e) => { ShowAndActivate(); OpenSettingsModal(); }) { Margin = new System.Windows.Forms.Padding(0, 1, 0, 1) });
@@ -1209,8 +1144,8 @@ namespace AntigravityDesktopClient
 
             metricsGrid.Children.Add(CreateMetricCard("CORE", isCoreRunning ? "ON" : "OFF", "CLIProxyAPI 核心", 0, out txtMetricCore));
             metricsGrid.Children.Add(CreateMetricCard("ACCOUNTS", "0", "已挂载凭据", 1, out txtMetricAccounts));
-            metricsGrid.Children.Add(CreateMetricCard("THROUGHPUT", "--", "实时吞吐均速", 2, out txtMetricThroughput));
-            metricsGrid.Children.Add(CreateMetricCard("LATENCY", "--", "首字延迟 TTFT", 3, out txtMetricLatency));
+            metricsGrid.Children.Add(CreateMetricCard("5H QUOTA", "--", "5小时可用额度", 2, out txtMetric5hQuota));
+            metricsGrid.Children.Add(CreateMetricCard("WEEKLY", "--", "周可用额度", 3, out txtMetricWeeklyQuota));
             body.Children.Add(metricsGrid);
 
             // Section 1: Hero Launch Card
@@ -1588,7 +1523,7 @@ namespace AntigravityDesktopClient
 
             chkSettingsFloatingHud = new CheckBox
             {
-                Content = " 开启桌面实时测速悬浮窗 (实时监测 Token/s 与首字延迟)",
+                Content = " 开启桌面实时额度悬浮窗 (实时监测当前账号 5H / 周可用额度)",
                 IsChecked = showFloatingHud,
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
@@ -2127,7 +2062,7 @@ namespace AntigravityDesktopClient
             }
 
             if (chkSettingsFloatingHud != null) chkSettingsFloatingHud.IsChecked = showFloatingHud;
-            if (trayHudMenu != null) trayHudMenu.Text = (showFloatingHud ? "✓ " : "    ") + "桌面测速悬浮窗";
+            if (trayHudMenu != null) trayHudMenu.Text = (showFloatingHud ? "✓ " : "    ") + "桌面额度悬浮窗";
             SaveUiPreferences();
         }
 
@@ -2517,70 +2452,6 @@ namespace AntigravityDesktopClient
                 txtMode.Foreground = new SolidColorBrush(isDarkMode ? ColAmber : System.Windows.Media.Color.FromRgb(180, 83, 9));
             }
 
-            // Real-time Session Telemetry (Throughput & Latency)
-            var telemetry = data.ContainsKey("telemetry") ? data["telemetry"] as Dictionary<string, object> : null;
-            double avgTps = 0;
-            int avgTtft = 0;
-            double lastTps = 0;
-            int lastTtft = 0;
-            bool isEstimated = false;
-            string tokenSource = "api-usage";
-
-            if (telemetry != null)
-            {
-                if (telemetry.ContainsKey("avgTokensPerSec") && telemetry["avgTokensPerSec"] != null)
-                {
-                    double.TryParse(telemetry["avgTokensPerSec"].ToString(), out avgTps);
-                }
-                if (telemetry.ContainsKey("avgTtftMs") && telemetry["avgTtftMs"] != null)
-                {
-                    int.TryParse(telemetry["avgTtftMs"].ToString(), out avgTtft);
-                }
-                if (telemetry.ContainsKey("lastTokensPerSec") && telemetry["lastTokensPerSec"] != null)
-                {
-                    double.TryParse(telemetry["lastTokensPerSec"].ToString(), out lastTps);
-                }
-                if (telemetry.ContainsKey("lastTtftMs") && telemetry["lastTtftMs"] != null)
-                {
-                    int.TryParse(telemetry["lastTtftMs"].ToString(), out lastTtft);
-                }
-                if (telemetry.ContainsKey("lastEstimated") && telemetry["lastEstimated"] != null)
-                {
-                    isEstimated = Convert.ToBoolean(telemetry["lastEstimated"]);
-                }
-                if (telemetry.ContainsKey("lastTokenSource") && telemetry["lastTokenSource"] != null)
-                {
-                    tokenSource = telemetry["lastTokenSource"].ToString();
-                }
-            }
-
-            double displayTps = avgTps > 0 ? avgTps : lastTps;
-            int displayTtft = avgTtft > 0 ? avgTtft : lastTtft;
-
-            if (displayTps > 0 || displayTtft > 0)
-            {
-                string prefix = isEstimated ? "~" : "";
-                string sourceLabel = tokenSource == "api-usage" ? "API usage (官方精确)" : "估算";
-                string modeHint = avgTps > 0 ? "会话全局加权均速" : "单次生成测速";
-                txtMetricThroughput.Text = (displayTps > 0 ? (prefix + displayTps.ToString("0.0") + " t/s") : "-- t/s");
-                txtMetricThroughput.Foreground = new SolidColorBrush(displayTps > 0 ? ColPrimary : ColTextMuted);
-                txtMetricThroughput.ToolTip = string.Format("当前指标: {0}\n全局加权均速: {1:0.0} t/s\n最近单次测速: {2:0.0} t/s\nToken 数据源: {3}", modeHint, avgTps, lastTps, sourceLabel);
-
-                txtMetricLatency.Text = (displayTtft > 0 ? (displayTtft.ToString() + " ms") : "-- ms");
-                txtMetricLatency.Foreground = new SolidColorBrush(displayTtft > 0 ? ColGreen : ColTextMuted);
-                txtMetricLatency.ToolTip = string.Format("会话平均首字延迟: {0} ms (最近单次: {1} ms)", avgTtft > 0 ? avgTtft.ToString() : "--", lastTtft > 0 ? lastTtft.ToString() : "--");
-            }
-            else
-            {
-                txtMetricThroughput.Text = "-- t/s";
-                txtMetricThroughput.Foreground = new SolidColorBrush(ColTextMuted);
-                txtMetricThroughput.ToolTip = "暂无活跃生成测速数据";
-
-                txtMetricLatency.Text = "-- ms";
-                txtMetricLatency.Foreground = new SolidColorBrush(ColTextMuted);
-                txtMetricLatency.ToolTip = "暂无活跃生成延迟数据";
-            }
-
             // Settings & Round-Robin Mode
             var settings = data.ContainsKey("settings") ? data["settings"] as Dictionary<string, object> : null;
             string currentModel = settings != null && settings.ContainsKey("defaultModel") ? settings["defaultModel"].ToString() : "gemini-3.7-flash-high";
@@ -2598,12 +2469,14 @@ namespace AntigravityDesktopClient
             }
             UpdateRoundRobinButtonUI();
 
-            // Accounts List & Quota for Floating HUD
+            // Accounts List & Active Account Quota
             var accounts = data.ContainsKey("accounts") ? data["accounts"] as ArrayList : null;
             txtMetricAccounts.Text = accounts != null ? accounts.Count.ToString() : "0";
 
             int hud5h = -1;
             int hudWeekly = -1;
+            string activeEmail = "";
+
             if (accounts != null && accounts.Count > 0)
             {
                 for (int i = 0; i < accounts.Count; i++)
@@ -2615,6 +2488,7 @@ namespace AntigravityDesktopClient
                     bool isActive = (accId == activeAccountId || email == activeAccountId || (string.IsNullOrEmpty(activeAccountId) && i == 0));
                     if (isActive)
                     {
+                        activeEmail = email;
                         var quota = acc.ContainsKey("quota") ? acc["quota"] as Dictionary<string, object> : null;
                         var summary = quota != null && quota.ContainsKey("summary") ? quota["summary"] as Dictionary<string, object>
                             : (quota != null && quota.ContainsKey("quota_summary") ? quota["quota_summary"] as Dictionary<string, object>
@@ -2651,6 +2525,33 @@ namespace AntigravityDesktopClient
                 }
             }
 
+            // Update Top Quota Cards
+            if (hud5h >= 0)
+            {
+                txtMetric5hQuota.Text = hud5h + "%";
+                txtMetric5hQuota.Foreground = new SolidColorBrush(hud5h >= 50 ? ColPrimary : (hud5h >= 20 ? ColAmber : ColRed));
+                txtMetric5hQuota.ToolTip = string.Format("当前生效账号: {0}\n5 小时短期可用额度: {1}%\n5 小时滑动窗口自动恢复", activeEmail, hud5h);
+            }
+            else
+            {
+                txtMetric5hQuota.Text = "--";
+                txtMetric5hQuota.Foreground = new SolidColorBrush(ColTextMuted);
+                txtMetric5hQuota.ToolTip = "未获取到 5 小时额度数据";
+            }
+
+            if (hudWeekly >= 0)
+            {
+                txtMetricWeeklyQuota.Text = hudWeekly + "%";
+                txtMetricWeeklyQuota.Foreground = new SolidColorBrush(hudWeekly >= 50 ? ColGreen : (hudWeekly >= 20 ? ColAmber : ColRed));
+                txtMetricWeeklyQuota.ToolTip = string.Format("当前生效账号: {0}\n每周总可用额度: {1}%\n7 天周期自动重置", activeEmail, hudWeekly);
+            }
+            else
+            {
+                txtMetricWeeklyQuota.Text = "--";
+                txtMetricWeeklyQuota.Foreground = new SolidColorBrush(ColTextMuted);
+                txtMetricWeeklyQuota.ToolTip = "未获取到周额度数据";
+            }
+
             // Low Quota Alert & Failover Toast Notifications
             if (hud5h >= 0 && hud5h <= 15 && lastAlerted5hQuota > 15)
             {
@@ -2674,12 +2575,9 @@ namespace AntigravityDesktopClient
             }
             lastActiveAccountId = activeAccountId;
 
-            double hudTps = lastTps > 0 ? lastTps : avgTps;
-            int hudTtft = lastTtft > 0 ? lastTtft : avgTtft;
-
             if (floatingHud != null && floatingHud.IsVisible)
             {
-                floatingHud.UpdateData(hudTps, hudTtft, hud5h);
+                floatingHud.UpdateData(hud5h, hudWeekly, activeEmail);
             }
 
             // Models
@@ -3877,12 +3775,12 @@ namespace AntigravityDesktopClient
             nodesScroll.Content = panelAvailableNodesList;
             nodeSelSp.Children.Add(nodesScroll);
 
-            // Embedded Standalone Mihomo Dedicated Action Bar
-            btnConfirmSelectedNodes = CreateButton("⚡ 立即一键激活独立通道 (已选 0 个)", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
+            // Dedicated Egress Channels Action Bar
+            btnConfirmSelectedNodes = CreateButton("⚡ 应用已选节点并生成独立通道计划 (已选 0 个)", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
             btnConfirmSelectedNodes.Padding = new Thickness(14, 10, 14, 10);
             btnConfirmSelectedNodes.Margin = new Thickness(0, 8, 0, 0);
             btnConfirmSelectedNodes.HorizontalAlignment = HorizontalAlignment.Stretch;
-            btnConfirmSelectedNodes.Click += (s, e) => ActivateEmbeddedStandaloneNetwork();
+            btnConfirmSelectedNodes.Click += (s, e) => PrepareSelectedNodesPlan();
             nodeSelSp.Children.Add(btnConfirmSelectedNodes);
 
             cardNodeSelector.Child = nodeSelSp;
@@ -4447,78 +4345,10 @@ namespace AntigravityDesktopClient
             {
                 if (cb.IsChecked == true) selectedCount++;
             }
-            if (btnPreparePlan != null)
+            if (btnConfirmSelectedNodes != null)
             {
-                btnConfirmSelectedNodes.Content = string.Format("⚡ 立即一键激活独立通道 (已选 {0} 个)", selectedCount);
+                btnConfirmSelectedNodes.Content = string.Format("⚡ 应用已选节点并生成独立通道计划 (已选 {0} 个)", selectedCount);
             }
-            else if (btnConfirmSelectedNodes != null)
-            {
-                btnConfirmSelectedNodes.Content = string.Format("⚡ 立即一键激活独立通道 (已选 {0} 个)", selectedCount);
-            }
-        }
-
-        
-        private void ActivateEmbeddedStandaloneNetwork()
-        {
-            List<Dictionary<string, object>> selectedList = new List<Dictionary<string, object>>();
-            for (int i = 0; i < nodeCheckBoxes.Count; i++)
-            {
-                if (nodeCheckBoxes[i].IsChecked == true && i < currentFetchedNodes.Count)
-                {
-                    selectedList.Add(currentFetchedNodes[i]);
-                }
-            }
-
-            if (selectedList.Count == 0)
-            {
-                MessageBox.Show("请至少勾选 1 个可用节点后再激活独立通道！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            string subUrl = txtProxySubUrl != null ? txtProxySubUrl.Text.Trim() : "";
-            txtProxySyncStatus.Text = string.Format("⚡ 正在启动内置独立 Mihomo 内核并一键就绪 {0} 个独立通道...", selectedList.Count);
-            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
-            if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = false;
-
-            var requestPayload = new Dictionary<string, object>();
-            requestPayload["selectedNodes"] = selectedList;
-            requestPayload["subscriptionUrl"] = subUrl;
-            requestPayload["customNodes"] = customSingleNodes;
-            string reqBody = jsonSerializer.Serialize(requestPayload);
-
-            ThreadPool.QueueUserWorkItem((st) =>
-            {
-                try
-                {
-                    string res = SendApiPost("api/network/activate-embedded", reqBody);
-                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
-                    var activePlan = dict != null && dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
-                    string msg = dict != null && dict.ContainsKey("message") ? dict["message"].ToString() : "内置专向内核已成功就绪";
-
-                    Dispatcher.Invoke((Action)delegate
-                    {
-                        if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
-                        currentActivationState = "active";
-                        currentActiveEgressPlanList = activePlan;
-                        currentEgressPlanList = activePlan;
-                        txtProxySyncStatus.Text = msg;
-                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
-                        RenderEgressPlanCards(activePlan);
-                        ShowToast("✓ 内置专向内核已启动，独立通道已完全解锁！");
-                        PingAllCandidateNodes();
-                    });
-                }
-                catch (Exception ex)
-                {
-                    Dispatcher.Invoke((Action)delegate
-                    {
-                        if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
-                        txtProxySyncStatus.Text = "⚠️ 启动内置内核失败: " + ex.Message;
-                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
-                        MessageBox.Show(ex.Message, "独立内核启动提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    });
-                }
-            });
         }
 
         private void PrepareSelectedNodesPlan()

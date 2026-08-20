@@ -13,3 +13,5 @@ diagnostics/
 backups/
 *.dpapi
 *.key
+图纸审核/
+bin/
