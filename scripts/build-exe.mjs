@@ -21,15 +21,11 @@ const APP_DIR = path.join(DIST, "AntigravityCodexBridge");
 console.log(`=== Building Antigravity Codex Bridge Standalone Package (${isStaging ? "STAGING MODE" : "RELEASE MODE"}) ===`);
 
 // 1. Clean and prepare output directories
-if (!isStaging) {
-  try {
-    execSync("taskkill /F /IM AntigravityCodexBridge.exe /T 2>nul || (exit 0)", { stdio: "ignore", shell: "cmd.exe" });
-  } catch {}
-}
-
 try {
   await fs.rm(DIST, { recursive: true, force: true });
-} catch {}
+} catch (error) {
+  throw new Error(`输出目录正在使用，请先退出旧版 Bridge，或使用 --staging 构建：${error.message}`);
+}
 await fs.mkdir(APP_DIR, { recursive: true });
 await fs.mkdir(path.join(APP_DIR, "public"), { recursive: true });
 
@@ -49,11 +45,8 @@ const appFiles = [
   "transaction.mjs",
   "history.mjs",
   "subscription.mjs",
-  "mihomo-config.mjs",
-  "mihomo-manager.mjs",
-  "mihomo-runtime.mjs",
   "telemetry.mjs",
-  "mihomo.lock.json",
+  "xiyou-runtime.mjs",
   "package.json",
   "cliproxy.lock.json",
   "launch-codex-api-service.ps1",
@@ -73,14 +66,8 @@ if (fsSync.existsSync(nodeModulesSrc)) {
   await fs.cp(nodeModulesSrc, nodeModulesDest, { recursive: true });
 }
 
-// Copy bin/ (mihomo.exe) - V0.4 Mandatory Check
-const binSrc = path.join(ROOT, "bin");
-const binMihomoSrc = path.join(binSrc, "mihomo.exe");
-if (!fsSync.existsSync(binMihomoSrc)) {
-  throw new Error("BUILD FAILED: bin/mihomo.exe is mandatory for V0.4 Embedded Mihomo packaging, but was not found. Please run 'npm run install:mihomo' first.");
-}
-const binDest = path.join(APP_DIR, "bin");
-await fs.cp(binSrc, binDest, { recursive: true });
+// Bundle the build runtime so the target computer does not need Node.js installed.
+await fs.copyFile(process.execPath, path.join(APP_DIR, "node.exe"));
 
 // 4. Compile Native Desktop GUI Cockpit .EXE (WPF Native Window)
 console.log("Compiling Native Windows Desktop Cockpit Application...");
@@ -114,9 +101,6 @@ if (fsSync.existsSync(cscPath) && fsSync.existsSync(desktopCsPath)) {
     } catch {
       fsSync.copyFileSync(tmpExePath, targetExePath);
     }
-    try {
-      await fs.copyFile(targetExePath, path.join(DIST, "AntigravityCodexBridge.exe"));
-    } catch {}
   } catch (err) {
     throw new Error(`Could not compile Desktop .EXE: ${err.message}`);
   }
@@ -138,17 +122,22 @@ if exist "AntigravityCodexBridge.exe" (
   exit
 )
 start "" "http://127.0.0.1:8787/"
-node server.mjs
+if exist "node.exe" (
+  "node.exe" server.mjs
+) else (
+  node server.mjs
+)
 `;
 
 await fs.writeFile(path.join(APP_DIR, "启动.bat"), launcherBat, "utf8");
-await fs.writeFile(path.join(DIST, "启动.bat"), launcherBat, "utf8");
+await fs.writeFile(path.join(DIST, "启动.bat"), `@echo off\r\nstart "" "%~dp0AntigravityCodexBridge\\AntigravityCodexBridge.exe"\r\n`, "utf8");
 
 // 6. Create README for the portable package
 const readmeTxt = `Antigravity Codex Bridge 便携运行包
 ========================================
 
 使用说明：
+0. 请先安装、登录并确认西游云能够正常联网；本工具不携带代理内核。
 1. 双击运行 "AntigravityCodexBridge.exe"（或 "启动.bat"）。
 2. 工具将在系统右下角任务栏托盘静默运行，并自动启动本地服务（127.0.0.1:8787）。
 3. 右键点击托盘图标：
@@ -158,6 +147,8 @@ const readmeTxt = `Antigravity Codex Bridge 便携运行包
    - 🛡️ 恢复官方配置：一键恢复官方 OpenAI 默认配置
    - 🚪 退出程序
 4. 关闭 Codex 窗口时，系统会自动将配置还原为官方，无需手动操作。
+5. 多端口配置按界面三步操作：生成计划 → 退出西游云后写入 → 重开西游云后验证。
+   写入前会自动备份；验证失败时请退出西游云并点击“恢复写入前备份”。
 
 全部数据仅在本地 127.0.0.1 回环运行。
 `;

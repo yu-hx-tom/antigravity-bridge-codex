@@ -149,17 +149,41 @@ test("Xiyou override script binds each Listener to a fixed proxy and chains ISP 
   const main = new Function(`${script}; return main;`)();
   const config = main({
     proxies: [{ name: relay.name, type: "ss" }],
-    listeners: [{ name: "keep-me", type: "mixed", port: 7888 }],
+    listeners: [
+      { name: "keep-me", type: "mixed", port: 7888 },
+      { name: "mixed-user-owned", type: "mixed", port: 7889 },
+      { name: "port-user-owned", type: "mixed", port: 7890 },
+    ],
   });
   const customProxy = config.proxies.find((proxy) => proxy.name === "ABC · 美国住宅");
   assert.equal(customProxy["dialer-proxy"], relay.name);
   assert.deepEqual(config.listeners.map((listener) => [listener.name, listener.port, listener.proxy]), [
     ["keep-me", 7888, undefined],
+    ["mixed-user-owned", 7889, undefined],
+    ["port-user-owned", 7890, undefined],
     ["abc-egress-7892", 7892, "ABC · 美国住宅"],
     ["abc-egress-7893", 7893, relay.name],
   ]);
   assert.equal(findActivatedEgress(residential, plan).port, 7892);
   assert.equal(findActivatedEgress({ id: "missing", name: "未激活节点" }, plan), null);
+});
+
+test("Xiyou override refuses fuzzy node or relay substitution", () => {
+  const selected = {
+    id: "sg-2",
+    name: "新加坡2｜高速",
+    protocol: "ANYTLS",
+    region: "新加坡",
+    isSupported: true,
+  };
+  const plan = buildPlanFromSelectedNodes([selected], 7892);
+  const main = new Function(`${createXiyouOverrideScript(plan)}; return main;`)();
+  const config = main({
+    proxies: [{ name: "新加坡1｜高速", type: "anytls" }],
+    listeners: [],
+  });
+
+  assert.deepEqual(config.listeners, [], "节点名称不完全一致时必须拒绝绑定，不能按地区或去数字替换");
 });
 
 test("tagAndScoreNode and pickRecommendedNodes prioritize IPLC and Residential across regions", () => {

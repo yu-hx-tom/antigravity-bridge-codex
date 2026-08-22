@@ -812,13 +812,20 @@ namespace AntigravityDesktopClient
         private Border cardNodeSelector;
         private TextBlock txtNodeSelectorSummary;
         private StackPanel panelAvailableNodesList;
-        private Button btnConfirmSelectedNodes;
         private List<Dictionary<string, object>> currentFetchedNodes = new List<Dictionary<string, object>>();
         private List<CheckBox> nodeCheckBoxes = new List<CheckBox>();
         private Dictionary<string, int> nodeLatencies = new Dictionary<string, int>();
         private Dictionary<string, int> egressLatencies = new Dictionary<string, int>();
         private Dictionary<string, string> nodeLatencyLabels = new Dictionary<string, string>();
         private Dictionary<string, string> egressLatencyLabels = new Dictionary<string, string>();
+        private Dictionary<string, Border> nodeLatencyPills = new Dictionary<string, Border>();
+        private Dictionary<string, TextBlock> nodeLatencyTexts = new Dictionary<string, TextBlock>();
+        private List<Button> candidatePingButtons = new List<Button>();
+        private HashSet<Button> activeSinglePingButtons = new HashSet<Button>();
+        private HashSet<string> selectedCandidateNodeIds = new HashSet<string>();
+        private bool hasCandidateSelection = false;
+        private bool isCandidatePingRunning = false;
+        private Button btnPingCandidateNodes;
         private ArrayList currentEgressPlanList = new ArrayList();
         private ArrayList currentActiveEgressPlanList = new ArrayList();
         private ArrayList currentPendingEgressPlanList = new ArrayList();
@@ -826,6 +833,9 @@ namespace AntigravityDesktopClient
         private Button btnPreparePlan;
         private Button btnCommitPending;
         private Button btnVerifyActivation;
+        private Button btnRollbackActivation;
+        private int hotApplyGeneration = 0;
+        private bool isHotApplyRunning = false;
 
         // Settings Modal Controls & State
         private Border settingsOverlay;
@@ -2341,6 +2351,7 @@ namespace AntigravityDesktopClient
         {
             string[] candidates = new string[]
             {
+                System.IO.Path.Combine(appDir, "node.exe"),
                 "D:\\WeGameApps\\node\\node.exe",
                 "C:\\Program Files\\nodejs\\node.exe",
                 "C:\\Program Files (x86)\\nodejs\\node.exe",
@@ -3834,13 +3845,17 @@ namespace AntigravityDesktopClient
             inSp.Children.Add(addNodeGrid);
             RenderCustomNodesList();
 
-            StackPanel actionRow = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            txtProxySyncStatus = new TextBlock { Text = "", FontSize = 12, Foreground = new SolidColorBrush(ColGreen), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+            Grid actionRow = new Grid();
+            actionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            actionRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            txtProxySyncStatus = new TextBlock { Text = "", FontSize = 12, Foreground = new SolidColorBrush(ColGreen), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 12, 0) };
+            Grid.SetColumn(txtProxySyncStatus, 0);
             actionRow.Children.Add(txtProxySyncStatus);
 
             Button btnFetchNodes = CreateButton("📥 解析并优选节点", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
             btnFetchNodes.Padding = new Thickness(18, 7, 18, 7);
             btnFetchNodes.Click += (s, e) => FetchCandidateNodes();
+            Grid.SetColumn(btnFetchNodes, 1);
             actionRow.Children.Add(btnFetchNodes);
             inSp.Children.Add(actionRow);
 
@@ -3866,14 +3881,14 @@ namespace AntigravityDesktopClient
 
             StackPanel summarySp = new StackPanel();
             summarySp.Children.Add(new TextBlock { Text = "节点选择与智能优选", FontSize = 14.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColTextMain), Margin = new Thickness(0, 0, 0, 4) });
-            txtNodeSelectorSummary = new TextBlock { Text = "已自动排除香港等受限地区，系统为您智能优选 5 个专线/高速节点：", FontSize = 12, Foreground = new SolidColorBrush(ColTextMuted) };
+            txtNodeSelectorSummary = new TextBlock { Text = "已自动排除香港等受限地区，系统为您智能优选 5 个专线/高速节点：", FontSize = 12, Foreground = new SolidColorBrush(ColTextMuted), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 12, 0) };
             summarySp.Children.Add(txtNodeSelectorSummary);
             Grid.SetColumn(summarySp, 0);
             topSelGrid.Children.Add(summarySp);
 
             StackPanel quickBtnRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
 
-            Button btnPingCandidateNodes = CreateButton("🔄 更新节点", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11);
+            btnPingCandidateNodes = CreateButton("🔄 刷新全部延迟", ColCardMuted, new SolidColorBrush(ColPrimaryDark), 11);
             btnPingCandidateNodes.Padding = new Thickness(10, 4, 10, 4);
             btnPingCandidateNodes.Margin = new Thickness(0, 0, 6, 0);
             btnPingCandidateNodes.Click += (s, e) => PingAllCandidateNodes();
@@ -3918,13 +3933,46 @@ namespace AntigravityDesktopClient
             nodesScroll.Content = panelAvailableNodesList;
             nodeSelSp.Children.Add(nodesScroll);
 
-            // Embedded Standalone Mihomo Dedicated Action Bar
-            btnConfirmSelectedNodes = CreateButton("⚡ 立即一键激活独立通道 (已选 0 个)", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
-            btnConfirmSelectedNodes.Padding = new Thickness(14, 10, 14, 10);
-            btnConfirmSelectedNodes.Margin = new Thickness(0, 8, 0, 0);
-            btnConfirmSelectedNodes.HorizontalAlignment = HorizontalAlignment.Stretch;
-            btnConfirmSelectedNodes.Click += (s, e) => ActivateEmbeddedStandaloneNetwork();
-            nodeSelSp.Children.Add(btnConfirmSelectedNodes);
+            Grid activationButtons = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+            for (int i = 0; i < 4; i++)
+            {
+                activationButtons.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            }
+
+            btnPreparePlan = CreateButton("① 生成端口计划 (已选 0 个)", ColPrimary, System.Windows.Media.Brushes.White, 11.5, true);
+            btnPreparePlan.Padding = new Thickness(10, 9, 10, 9);
+            btnPreparePlan.Margin = new Thickness(0, 0, 5, 0);
+            btnPreparePlan.Content = "⚡ 一键应用独立通道（已选 0 个）";
+            btnPreparePlan.Click += (s, e) => PrepareSelectedNodesPlan();
+            Grid.SetColumn(btnPreparePlan, 0);
+            Grid.SetColumnSpan(btnPreparePlan, 3);
+            activationButtons.Children.Add(btnPreparePlan);
+
+            btnCommitPending = CreateButton("② 退出西游云后写入", ColCardMuted, new SolidColorBrush(ColTextMuted), 11.5);
+            btnCommitPending.Padding = new Thickness(10, 9, 10, 9);
+            btnCommitPending.Margin = new Thickness(5, 0, 5, 0);
+            btnCommitPending.Click += (s, e) => CommitPendingXiyouScriptAction();
+            btnCommitPending.Visibility = Visibility.Collapsed;
+            Grid.SetColumn(btnCommitPending, 1);
+            activationButtons.Children.Add(btnCommitPending);
+
+            btnVerifyActivation = CreateButton("③ 重开西游云后验证", ColCardMuted, new SolidColorBrush(ColTextMuted), 11.5);
+            btnVerifyActivation.Padding = new Thickness(10, 9, 10, 9);
+            btnVerifyActivation.Margin = new Thickness(5, 0, 5, 0);
+            btnVerifyActivation.Click += (s, e) => VerifyPendingActivationAction();
+            btnVerifyActivation.Visibility = Visibility.Collapsed;
+            Grid.SetColumn(btnVerifyActivation, 2);
+            activationButtons.Children.Add(btnVerifyActivation);
+
+            btnRollbackActivation = CreateButton("恢复写入前备份", ColCardMuted, new SolidColorBrush(ColTextMuted), 11.5);
+            btnRollbackActivation.Padding = new Thickness(10, 9, 10, 9);
+            btnRollbackActivation.Margin = new Thickness(5, 0, 0, 0);
+            btnRollbackActivation.Click += (s, e) => RollbackPendingXiyouScriptAction();
+            Grid.SetColumn(btnRollbackActivation, 3);
+            activationButtons.Children.Add(btnRollbackActivation);
+
+            nodeSelSp.Children.Add(activationButtons);
+            UpdateActivationStepButtons();
 
             cardNodeSelector.Child = nodeSelSp;
             body.Children.Add(cardNodeSelector);
@@ -4163,6 +4211,14 @@ namespace AntigravityDesktopClient
                                 var nDict = item as Dictionary<string, object>;
                                 if (nDict != null) currentFetchedNodes.Add(nDict);
                             }
+                        selectedCandidateNodeIds.Clear();
+                        for (int i = 0; i < currentFetchedNodes.Count; i++)
+                        {
+                            var candidate = currentFetchedNodes[i];
+                            if (candidate.ContainsKey("recommended") && Convert.ToBoolean(candidate["recommended"]))
+                                selectedCandidateNodeIds.Add(GetCandidateNodeId(candidate, i));
+                        }
+                        hasCandidateSelection = true;
 
                         string warningMsg = (dict != null && dict.ContainsKey("warning")) ? dict["warning"].ToString() : "";
 
@@ -4207,6 +4263,7 @@ namespace AntigravityDesktopClient
 
                         cardNodeSelector.Visibility = Visibility.Visible;
                         RenderAvailableNodesSelector();
+                        PingAllCandidateNodes();
                     });
                 }
                 catch (Exception ex)
@@ -4220,10 +4277,20 @@ namespace AntigravityDesktopClient
             });
         }
 
+        private string GetCandidateNodeId(Dictionary<string, object> node, int fallbackIndex)
+        {
+            if (node != null && node.ContainsKey("id") && node["id"] != null) return node["id"].ToString();
+            if (node != null && node.ContainsKey("name") && node["name"] != null) return node["name"].ToString();
+            return fallbackIndex.ToString();
+        }
+
         private void RenderAvailableNodesSelector()
         {
             panelAvailableNodesList.Children.Clear();
             nodeCheckBoxes.Clear();
+            nodeLatencyPills.Clear();
+            nodeLatencyTexts.Clear();
+            candidatePingButtons.Clear();
 
             if (currentFetchedNodes.Count == 0)
             {
@@ -4249,8 +4316,9 @@ namespace AntigravityDesktopClient
                 string country = n.ContainsKey("country") ? n["country"].ToString() : "🌐";
                 string region = n.ContainsKey("region") ? n["region"].ToString() : "其他";
                 string protocol = n.ContainsKey("protocol") ? n["protocol"].ToString() : "HTTP";
-                string nodeId = n.ContainsKey("id") ? n["id"].ToString() : i.ToString();
+                string nodeId = GetCandidateNodeId(n, i);
                 bool recommended = n.ContainsKey("recommended") && Convert.ToBoolean(n["recommended"]);
+                bool isCustomIsp = n.ContainsKey("isCustomIsp") && Convert.ToBoolean(n["isCustomIsp"]);
                 var tags = n.ContainsKey("tags") ? n["tags"] as ArrayList : null;
 
                 int latency = nodeLatencies.ContainsKey(nodeId) ? nodeLatencies[nodeId] : (nodeLatencies.ContainsKey(name) ? nodeLatencies[name] : 0);
@@ -4277,13 +4345,13 @@ namespace AntigravityDesktopClient
 
                 CheckBox cb = new CheckBox
                 {
-                    IsChecked = recommended,
+                    IsChecked = hasCandidateSelection ? selectedCandidateNodeIds.Contains(nodeId) : recommended,
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, 0, 8, 0),
                     Tag = i
                 };
-                cb.Checked += (s, e) => { UpdateSelectedNodesCount(); UpdateCardBorder(nodeCard, cb.IsChecked == true); };
-                cb.Unchecked += (s, e) => { UpdateSelectedNodesCount(); UpdateCardBorder(nodeCard, cb.IsChecked == true); };
+                cb.Checked += (s, e) => { hasCandidateSelection = true; selectedCandidateNodeIds.Add(nodeId); UpdateSelectedNodesCount(); UpdateCardBorder(nodeCard, true); };
+                cb.Unchecked += (s, e) => { hasCandidateSelection = true; selectedCandidateNodeIds.Remove(nodeId); UpdateSelectedNodesCount(); UpdateCardBorder(nodeCard, false); };
                 nodeCheckBoxes.Add(cb);
                 Grid.SetColumn(cb, 0);
                 topL.Children.Add(cb);
@@ -4294,13 +4362,26 @@ namespace AntigravityDesktopClient
                 Grid.SetColumn(titleSp, 1);
                 topL.Children.Add(titleSp);
 
+                StackPanel cardActions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                 if (recommended)
                 {
-                    Border recPill = new Border { Background = new SolidColorBrush(ColPrimaryLight), BorderBrush = new SolidColorBrush(ColPrimary), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(5, 1, 5, 1) };
+                    Border recPill = new Border { Background = new SolidColorBrush(ColPrimaryLight), BorderBrush = new SolidColorBrush(ColPrimary), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4), Padding = new Thickness(5, 1, 5, 1), Margin = new Thickness(0, 0, 5, 0) };
                     recPill.Child = new TextBlock { Text = "⭐ 推荐", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(ColPrimaryDark) };
-                    Grid.SetColumn(recPill, 2);
-                    topL.Children.Add(recPill);
+                    cardActions.Children.Add(recPill);
                 }
+                if (!isCustomIsp)
+                {
+                    Button pingOneButton = CreateButton("⚡", ColPrimaryLight, new SolidColorBrush(ColPrimaryDark), 12, true);
+                    pingOneButton.Width = 26;
+                    pingOneButton.Height = 22;
+                    pingOneButton.Padding = new Thickness(2, 0, 2, 0);
+                    pingOneButton.ToolTip = "测试此节点延迟";
+                    pingOneButton.Click += (s, e) => { e.Handled = true; PingSingleCandidateNode(n, nodeId, pingOneButton); };
+                    candidatePingButtons.Add(pingOneButton);
+                    cardActions.Children.Add(pingOneButton);
+                }
+                Grid.SetColumn(cardActions, 2);
+                topL.Children.Add(cardActions);
                 cardSp.Children.Add(topL);
 
                 // Bottom Line: Tags + Protocol + Latency Pill
@@ -4333,22 +4414,28 @@ namespace AntigravityDesktopClient
                     CornerRadius = new CornerRadius(4),
                     Padding = new Thickness(5, 1, 5, 1)
                 };
-                string cleanPrefix = latencyLabel.Replace(latency.ToString() + "ms", "").Replace(latency.ToString() + " ms", "").Replace("ms", "").Trim();
-                if (string.IsNullOrEmpty(cleanPrefix)) cleanPrefix = "延迟";
                 string latText;
                 System.Windows.Media.Color latCol;
                 if (latency > 0)
                 {
-                    latText = string.Format("{0} {1}ms", cleanPrefix, latency);
+                    latText = string.Format("节点测速 {0}ms", latency);
                     latCol = latency < 150 ? ColGreen : ColAmber;
+                }
+                else if (latency < 0)
+                {
+                    latText = string.IsNullOrEmpty(latencyLabel) ? "节点测速超时" : latencyLabel;
+                    latCol = ColRed;
                 }
                 else
                 {
-                    latText = "待激活后测速";
+                    latText = "尚未测速";
                     latCol = ColTextMuted;
                 }
-                
-                latPill.Child = new TextBlock { Text = latText, FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(latCol) };
+
+                TextBlock latencyText = new TextBlock { Text = latText, FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(latCol) };
+                latPill.Child = latencyText;
+                nodeLatencyPills[nodeId] = latPill;
+                nodeLatencyTexts[nodeId] = latencyText;
                 Grid.SetColumn(latPill, 1);
                 botL.Children.Add(latPill);
 
@@ -4371,6 +4458,7 @@ namespace AntigravityDesktopClient
             }
 
             panelAvailableNodesList.Children.Add(grid);
+            UpdateCandidatePingButtonStates();
             UpdateSelectedNodesCount();
         }
 
@@ -4382,75 +4470,85 @@ namespace AntigravityDesktopClient
 
         private void PingAllCandidateNodes()
         {
-            if (currentFetchedNodes.Count == 0) return;
-            txtProxySyncStatus.Text = "正在测速所有节点连通性...";
+            if (currentFetchedNodes.Count == 0 || isCandidatePingRunning || activeSinglePingButtons.Count > 0) return;
+            isCandidatePingRunning = true;
+            if (btnPingCandidateNodes != null)
+            {
+                btnPingCandidateNodes.IsEnabled = false;
+                btnPingCandidateNodes.Content = "刷新中 0/" + currentFetchedNodes.Count.ToString();
+            }
+            UpdateCandidatePingButtonStates();
+            txtProxySyncStatus.Text = "正在优先测速推荐节点，随后每批刷新 5 个...";
             txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
 
-            string reqBody = string.Format("{{\"nodes\":{0}}}", jsonSerializer.Serialize(currentFetchedNodes));
+            List<Dictionary<string, object>> orderedNodes = new List<Dictionary<string, object>>();
+            foreach (var node in currentFetchedNodes)
+                if (node.ContainsKey("recommended") && Convert.ToBoolean(node["recommended"])) orderedNodes.Add(node);
+            foreach (var node in currentFetchedNodes)
+                if (!node.ContainsKey("recommended") || !Convert.ToBoolean(node["recommended"])) orderedNodes.Add(node);
+
             ThreadPool.QueueUserWorkItem((st) =>
             {
+                int success = 0;
+                int failed = 0;
+                int unavailable = 0;
                 try
                 {
-                    string res = SendApiPost("api/network/ping", reqBody);
-                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
-                    var lats = dict != null && dict.ContainsKey("latencies") ? dict["latencies"] as Dictionary<string, object> : null;
-                    var measurements = dict != null && dict.ContainsKey("measurements") ? dict["measurements"] as Dictionary<string, object> : null;
-                    var summary = dict != null && dict.ContainsKey("summary") ? dict["summary"] as Dictionary<string, object> : null;
-
-                    if (lats != null)
+                    for (int offset = 0; offset < orderedNodes.Count; offset += 5)
                     {
-                        Dispatcher.Invoke((Action)delegate
+                        List<Dictionary<string, object>> batch = orderedNodes.GetRange(offset, Math.Min(5, orderedNodes.Count - offset));
+                        var payload = new Dictionary<string, object>();
+                        payload["scope"] = "candidates";
+                        payload["nodes"] = batch;
+                        try
                         {
-                            foreach (var kvp in lats)
-                            {
-                                if (kvp.Value == null) nodeLatencies[kvp.Key] = 0;
-                                else
-                                {
-                                    int val = 0;
-                                    if (int.TryParse(kvp.Value.ToString(), out val)) nodeLatencies[kvp.Key] = val;
-                                }
-                            }
-                            if (measurements != null)
-                            {
-                                foreach (var kvp in measurements)
-                                {
-                                    var detail = kvp.Value as Dictionary<string, object>;
-                                    if (detail != null && detail.ContainsKey("label")) nodeLatencyLabels[kvp.Key] = detail["label"].ToString();
-                                }
-                            }
-
-                            int succ = 0, fail = 0, inact = 0;
+                            string res = SendApiPost("api/network/ping", jsonSerializer.Serialize(payload));
+                            var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                            var summary = dict != null && dict.ContainsKey("summary") ? dict["summary"] as Dictionary<string, object> : null;
                             if (summary != null)
                             {
-                                if (summary.ContainsKey("success")) int.TryParse(summary["success"].ToString(), out succ);
-                                if (summary.ContainsKey("failed")) int.TryParse(summary["failed"].ToString(), out fail);
-                                if (summary.ContainsKey("inactive")) int.TryParse(summary["inactive"].ToString(), out inact);
+                                int count = 0;
+                                if (summary.ContainsKey("success") && int.TryParse(summary["success"].ToString(), out count)) success += count;
+                                if (summary.ContainsKey("failed") && int.TryParse(summary["failed"].ToString(), out count)) failed += count;
+                                if (summary.ContainsKey("inactive") && int.TryParse(summary["inactive"].ToString(), out count)) unavailable += count;
                             }
-
-                            if (succ > 0 && fail == 0)
+                            int completed = Math.Min(offset + batch.Count, orderedNodes.Count);
+                            Dispatcher.Invoke((Action)delegate
                             {
-                                txtProxySyncStatus.Text = string.Format("✓ 已完成全链路测速，{0} 个已激活独立通道全部正常", succ);
-                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
-                            }
-                            else if (succ > 0 && fail > 0)
+                                ApplyCandidatePingBatch(dict);
+                                txtProxySyncStatus.Text = string.Format("正在刷新全部节点延迟... {0}/{1}", completed, orderedNodes.Count);
+                                if (btnPingCandidateNodes != null) btnPingCandidateNodes.Content = string.Format("刷新中 {0}/{1}", completed, orderedNodes.Count);
+                            });
+                        }
+                        catch
+                        {
+                            failed += batch.Count;
+                            Dispatcher.Invoke((Action)delegate
                             {
-                                txtProxySyncStatus.Text = string.Format("⚠ 已完成测速：{0} 个通道正常，{1} 个通道超时", succ, fail);
-                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
-                            }
-                            else if (succ == 0 && fail > 0)
-                            {
-                                txtProxySyncStatus.Text = "⚠️ 测速完成：未发现可用独立出口";
-                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
-                            }
-                            else
-                            {
-                                txtProxySyncStatus.Text = "尚无可测速的已激活独立通道 (请先勾选并一键激活)";
-                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColTextMuted);
-                            }
-
-                            RenderAvailableNodesSelector();
-                        });
+                                foreach (var node in batch)
+                                {
+                                    string key = GetCandidateNodeId(node, 0);
+                                    nodeLatencies[key] = -1;
+                                    nodeLatencyLabels[key] = "测速请求失败";
+                                    UpdateCandidateLatencyVisual(key);
+                                }
+                            });
+                        }
                     }
+
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        if (success > 0)
+                        {
+                            txtProxySyncStatus.Text = string.Format("✓ 已刷新全部 {0} 个节点：{1} 个可用，{2} 个超时", orderedNodes.Count, success, failed + unavailable);
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(failed + unavailable > 0 ? ColAmber : ColGreen);
+                        }
+                        else
+                        {
+                            txtProxySyncStatus.Text = unavailable > 0 ? "⚠️ 西游云测速接口不可用，请确认西游云正在运行" : "⚠️ 全部节点测速超时";
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        }
+                    });
                 }
                 catch (Exception ex)
                 {
@@ -4460,7 +4558,130 @@ namespace AntigravityDesktopClient
                         txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
                     });
                 }
+                finally
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        isCandidatePingRunning = false;
+                        if (btnPingCandidateNodes != null)
+                        {
+                            btnPingCandidateNodes.IsEnabled = true;
+                            btnPingCandidateNodes.Content = "🔄 刷新全部延迟";
+                        }
+                        UpdateCandidatePingButtonStates();
+                    });
+                }
             });
+        }
+
+        private void PingSingleCandidateNode(Dictionary<string, object> node, string nodeId, Button button)
+        {
+            if (node == null || button == null || isCandidatePingRunning || activeSinglePingButtons.Contains(button) || activeSinglePingButtons.Count >= 5) return;
+            activeSinglePingButtons.Add(button);
+            string nodeName = node.ContainsKey("name") ? node["name"].ToString() : "当前节点";
+            UpdateCandidatePingButtonStates();
+            button.Content = "…";
+            if (nodeLatencyTexts.ContainsKey(nodeId))
+            {
+                nodeLatencyTexts[nodeId].Text = "测速中...";
+                nodeLatencyTexts[nodeId].Foreground = new SolidColorBrush(ColPrimary);
+            }
+
+            ThreadPool.QueueUserWorkItem((state) =>
+            {
+                try
+                {
+                    JavaScriptSerializer workerSerializer = new JavaScriptSerializer();
+                    var payload = new Dictionary<string, object>();
+                    payload["scope"] = "candidates";
+                    payload["nodes"] = new List<Dictionary<string, object>> { node };
+                    string responseText = SendApiPost("api/network/ping", workerSerializer.Serialize(payload));
+                    var response = workerSerializer.Deserialize<Dictionary<string, object>>(responseText);
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        ApplyCandidatePingBatch(response);
+                        int latency = nodeLatencies.ContainsKey(nodeId) ? nodeLatencies[nodeId] : -1;
+                        txtProxySyncStatus.Text = latency > 0
+                            ? string.Format("✓ {0} 节点测速 {1}ms", nodeName, latency)
+                            : string.Format("⚠️ {0} 节点测速超时", nodeName);
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(latency > 0 ? ColGreen : ColRed);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        nodeLatencies[nodeId] = -1;
+                        nodeLatencyLabels[nodeId] = "测速请求失败";
+                        UpdateCandidateLatencyVisual(nodeId);
+                        txtProxySyncStatus.Text = "⚠️ 单节点测速失败: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                    });
+                }
+                finally
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        activeSinglePingButtons.Remove(button);
+                        button.Content = "⚡";
+                        UpdateCandidatePingButtonStates();
+                    });
+                }
+            });
+        }
+
+        private void UpdateCandidatePingButtonStates()
+        {
+            if (btnPingCandidateNodes != null) btnPingCandidateNodes.IsEnabled = !isCandidatePingRunning && activeSinglePingButtons.Count == 0;
+            bool singleLimitReached = activeSinglePingButtons.Count >= 5;
+            foreach (var button in candidatePingButtons)
+                button.IsEnabled = !isCandidatePingRunning && !activeSinglePingButtons.Contains(button) && !singleLimitReached;
+        }
+
+        private void ApplyCandidatePingBatch(Dictionary<string, object> response)
+        {
+            var lats = response != null && response.ContainsKey("latencies") ? response["latencies"] as Dictionary<string, object> : null;
+            var measurements = response != null && response.ContainsKey("measurements") ? response["measurements"] as Dictionary<string, object> : null;
+            if (measurements == null) return;
+
+            foreach (var kvp in measurements)
+            {
+                var detail = kvp.Value as Dictionary<string, object>;
+                bool ok = detail != null && detail.ContainsKey("ok") && Convert.ToBoolean(detail["ok"]);
+                int latency = 0;
+                if (ok && lats != null && lats.ContainsKey(kvp.Key) && lats[kvp.Key] != null)
+                    int.TryParse(lats[kvp.Key].ToString(), out latency);
+                nodeLatencies[kvp.Key] = ok && latency > 0 ? latency : -1;
+                nodeLatencyLabels[kvp.Key] = detail != null && detail.ContainsKey("label") ? detail["label"].ToString() : (ok ? "节点测速" : "节点测速超时");
+                UpdateCandidateLatencyVisual(kvp.Key);
+            }
+        }
+
+        private void UpdateCandidateLatencyVisual(string nodeId)
+        {
+            if (!nodeLatencyPills.ContainsKey(nodeId) || !nodeLatencyTexts.ContainsKey(nodeId)) return;
+            int latency = nodeLatencies.ContainsKey(nodeId) ? nodeLatencies[nodeId] : 0;
+            string label = nodeLatencyLabels.ContainsKey(nodeId) ? nodeLatencyLabels[nodeId] : "尚未测速";
+            Border pill = nodeLatencyPills[nodeId];
+            TextBlock text = nodeLatencyTexts[nodeId];
+            if (latency > 0)
+            {
+                pill.Background = new SolidColorBrush(latency < 150 ? System.Windows.Media.Color.FromArgb(30, 34, 197, 94) : System.Windows.Media.Color.FromArgb(30, 245, 158, 11));
+                text.Text = string.Format("节点测速 {0}ms", latency);
+                text.Foreground = new SolidColorBrush(latency < 150 ? ColGreen : ColAmber);
+            }
+            else if (latency < 0)
+            {
+                pill.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(30, 239, 68, 68));
+                text.Text = string.IsNullOrEmpty(label) ? "节点测速超时" : label;
+                text.Foreground = new SolidColorBrush(ColRed);
+            }
+            else
+            {
+                pill.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 148, 163, 184));
+                text.Text = "尚未测速";
+                text.Foreground = new SolidColorBrush(ColTextMuted);
+            }
         }
 
         private void PingEgressChannels()
@@ -4469,7 +4690,10 @@ namespace AntigravityDesktopClient
             txtProxySyncStatus.Text = "正在测试独立通道出口延迟...";
             txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
 
-            string reqBody = string.Format("{{\"nodes\":{0}}}", jsonSerializer.Serialize(currentEgressPlanList));
+            var requestPayload = new Dictionary<string, object>();
+            requestPayload["scope"] = "egress";
+            requestPayload["nodes"] = currentEgressPlanList;
+            string reqBody = jsonSerializer.Serialize(requestPayload);
             ThreadPool.QueueUserWorkItem((st) =>
             {
                 try
@@ -4568,16 +4792,12 @@ namespace AntigravityDesktopClient
             }
             if (btnPreparePlan != null)
             {
-                btnConfirmSelectedNodes.Content = string.Format("⚡ 立即一键激活独立通道 (已选 {0} 个)", selectedCount);
-            }
-            else if (btnConfirmSelectedNodes != null)
-            {
-                btnConfirmSelectedNodes.Content = string.Format("⚡ 立即一键激活独立通道 (已选 {0} 个)", selectedCount);
+                btnPreparePlan.Content = string.Format("⚡ 一键应用独立通道（已选 {0} 个）", selectedCount);
             }
         }
 
         
-        private void ActivateEmbeddedStandaloneNetwork()
+        private void PrepareSelectedNodesPlan()
         {
             List<Dictionary<string, object>> selectedList = new List<Dictionary<string, object>>();
             for (int i = 0; i < nodeCheckBoxes.Count; i++)
@@ -4590,14 +4810,16 @@ namespace AntigravityDesktopClient
 
             if (selectedList.Count == 0)
             {
-                MessageBox.Show("请至少勾选 1 个可用节点后再激活独立通道！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("请至少勾选 1 个可用节点后再应用独立通道！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
+            int generation = Interlocked.Increment(ref hotApplyGeneration);
+            isHotApplyRunning = true;
             string subUrl = txtProxySubUrl != null ? txtProxySubUrl.Text.Trim() : "";
-            txtProxySyncStatus.Text = string.Format("⚡ 正在启动内置独立 Mihomo 内核并一键就绪 {0} 个独立通道...", selectedList.Count);
+            txtProxySyncStatus.Text = string.Format("正在为 {0} 个节点生成西游云热应用脚本...", selectedList.Count);
             txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
-            if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = false;
+            UpdateActivationStepButtons();
 
             var requestPayload = new Dictionary<string, object>();
             requestPayload["selectedNodes"] = selectedList;
@@ -4607,76 +4829,145 @@ namespace AntigravityDesktopClient
 
             ThreadPool.QueueUserWorkItem((st) =>
             {
+                string scriptCode = "";
                 try
                 {
-                    // 激活接口使用 90 秒超时以覆盖完整物理探测
-                    string res = SendApiPost("api/network/activate-embedded", reqBody, 90000);
-                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
-                    if (dict == null) throw new InvalidOperationException("后端返回了空数据");
+                    string prepareText = SendApiPost("api/network/prepare-plan", reqBody, 30000);
+                    if (generation != hotApplyGeneration) return;
+                    var prepareResult = jsonSerializer.Deserialize<Dictionary<string, object>>(prepareText);
+                    var pendingPlan = prepareResult != null && prepareResult.ContainsKey("pendingEgressPlan")
+                        ? prepareResult["pendingEgressPlan"] as ArrayList
+                        : null;
 
-                    bool isOk = dict.ContainsKey("ok") && Convert.ToBoolean(dict["ok"]);
-                    string state = dict.ContainsKey("state") ? dict["state"].ToString() : "failed";
-                    var activePlan = dict.ContainsKey("egressPlan") ? dict["egressPlan"] as ArrayList : null;
-                    string msg = dict.ContainsKey("message") ? dict["message"].ToString() : "独立通道已就绪";
-
-                    if (!isOk)
-                    {
-                        string err = dict.ContainsKey("error") ? dict["error"].ToString() : msg;
-                        throw new InvalidOperationException(string.IsNullOrWhiteSpace(err) ? "独立通道激活失败" : err);
-                    }
-
-                    if (state != "active" && state != "partial")
-                    {
-                        throw new InvalidOperationException("激活状态异常: " + state);
-                    }
-
-                    if (activePlan == null || activePlan.Count == 0)
-                    {
-                        throw new InvalidOperationException("后端未返回任何有效独立通道");
-                    }
-
-                    // 从服务端拉取最新真实 status 作为唯一事实来源 (指导第 18 条)
-                    try
-                    {
-                        string statusJson = SendApiGet("api/network/status", 5000);
-                        var statusDict = jsonSerializer.Deserialize<Dictionary<string, object>>(statusJson);
-                        if (statusDict != null && statusDict.ContainsKey("egressPlan"))
-                        {
-                            var sPlan = statusDict["egressPlan"] as ArrayList;
-                            if (sPlan != null) activePlan = sPlan;
-                        }
-                    }
-                    catch {}
+                    string stageText = SendApiPost("api/network/stage-hot-apply", "{}", 30000);
+                    if (generation != hotApplyGeneration) return;
+                    var stageResult = jsonSerializer.Deserialize<Dictionary<string, object>>(stageText);
+                    scriptCode = stageResult != null && stageResult.ContainsKey("scriptCode")
+                        ? stageResult["scriptCode"].ToString()
+                        : "";
+                    if (string.IsNullOrEmpty(scriptCode)) throw new Exception("西游云热应用脚本为空");
 
                     Dispatcher.Invoke((Action)delegate
                     {
-                        if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
-                        currentActivationState = state;
-                        currentActiveEgressPlanList = activePlan;
-                        currentEgressPlanList = activePlan;
-                        txtProxySyncStatus.Text = msg;
-                        txtProxySyncStatus.Foreground = new SolidColorBrush(state == "partial" ? ColAmber : ColGreen);
-                        RenderEgressPlanCards(activePlan);
-                        ShowToast(state == "partial" ? "⚠ 独立通道已部分就绪，可用节点已解锁" : "✓ 内置专向内核已启动，独立通道已完全解锁！");
-                        PingAllCandidateNodes();
+                        if (generation != hotApplyGeneration) return;
+                        SetClipboardTextWithRetry(scriptCode);
+                        currentActivationState = "awaiting_save";
+                        currentPendingEgressPlanList = pendingPlan;
+                        currentEgressPlanList = pendingPlan;
+                        isHotApplyRunning = false;
+                        txtProxySyncStatus.Text = "脚本已复制。请在西游云打开：设置 → 脚本 → Antigravity多端口并发代理脚本 → 编辑，按 Ctrl+A、Ctrl+V 后保存；首次使用若没有该脚本，请按 + 新建同名脚本。";
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                        UpdateActivationStepButtons();
+                        RenderEgressPlanCards(pendingPlan);
+                        ShowToast("脚本已复制，请到西游云脚本编辑器粘贴并保存");
+                        FocusXiyouWindow();
                     });
+
+                    string lastMessage = "";
+                    DateTime deadline = DateTime.Now.AddMinutes(5);
+                    while (DateTime.Now < deadline && generation == hotApplyGeneration)
+                    {
+                        Thread.Sleep(1000);
+                        Dictionary<string, object> readiness = null;
+                        try
+                        {
+                            string readinessText = SendApiGet("api/network/activation-readiness", 7000);
+                            readiness = jsonSerializer.Deserialize<Dictionary<string, object>>(readinessText);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        if (readiness == null) continue;
+                        string readinessMessage = readiness.ContainsKey("message") ? readiness["message"].ToString() : "等待西游云保存脚本";
+                        bool ready = readiness.ContainsKey("ready") && Convert.ToBoolean(readiness["ready"]);
+                        if (readinessMessage != lastMessage)
+                        {
+                            lastMessage = readinessMessage;
+                            Dispatcher.BeginInvoke((Action)delegate
+                            {
+                                if (generation != hotApplyGeneration) return;
+                                txtProxySyncStatus.Text = "⏳ " + readinessMessage;
+                                txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                            });
+                        }
+                        if (!ready) continue;
+
+                        Dispatcher.Invoke((Action)delegate
+                        {
+                            if (generation != hotApplyGeneration) return;
+                            isHotApplyRunning = true;
+                            txtProxySyncStatus.Text = "已检测到脚本和端口生效，正在验证各端口真实出口...";
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+                            UpdateActivationStepButtons();
+                        });
+
+                        string verifyText = SendApiPost("api/network/verify-activation", "{}", 120000);
+                        if (generation != hotApplyGeneration) return;
+                        var verifyResult = jsonSerializer.Deserialize<Dictionary<string, object>>(verifyText);
+                        var activePlan = verifyResult != null && verifyResult.ContainsKey("egressPlan")
+                            ? verifyResult["egressPlan"] as ArrayList
+                            : null;
+                        string verifyMessage = verifyResult != null && verifyResult.ContainsKey("message")
+                            ? verifyResult["message"].ToString()
+                            : "独立出口通道已生效";
+
+                        Dispatcher.Invoke((Action)delegate
+                        {
+                            if (generation != hotApplyGeneration) return;
+                            currentActivationState = "active";
+                            currentActiveEgressPlanList = activePlan;
+                            currentEgressPlanList = activePlan;
+                            currentPendingEgressPlanList = null;
+                            txtProxySyncStatus.Text = "✓ " + verifyMessage;
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                            ClearClipboardIfUnchanged(scriptCode);
+                            UpdateActivationStepButtons();
+                            RenderEgressPlanCards(activePlan);
+                            ShowToast("✓ 独立出口通道已自动验证并生效");
+                        });
+                        return;
+                    }
+
+                    if (generation == hotApplyGeneration)
+                    {
+                        Dispatcher.Invoke((Action)delegate
+                        {
+                            if (generation != hotApplyGeneration) return;
+                            txtProxySyncStatus.Text = "尚未检测到西游云保存新脚本。脚本仍在剪贴板中；完成粘贴并保存后，可再次点击“一键应用独立通道”。";
+                            txtProxySyncStatus.Foreground = new SolidColorBrush(ColAmber);
+                        });
+                    }
                 }
                 catch (Exception ex)
                 {
+                    if (generation != hotApplyGeneration) return;
                     Dispatcher.Invoke((Action)delegate
                     {
-                        if (btnConfirmSelectedNodes != null) btnConfirmSelectedNodes.IsEnabled = true;
+                        if (generation != hotApplyGeneration) return;
                         currentActivationState = "failed";
-                        txtProxySyncStatus.Text = "⚠️ 启动独立通道失败: " + ex.Message;
+                        txtProxySyncStatus.Text = "⚠️ 应用独立通道失败: " + ex.Message;
                         txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
-                        MessageBox.Show(ex.Message, "独立内核启动提示", MessageBoxButton.OK, MessageBoxImage.Warning);
-                        LoadProxySettingsView();
+                        UpdateActivationStepButtons();
                     });
+                }
+                finally
+                {
+                    if (generation == hotApplyGeneration)
+                    {
+                        Dispatcher.BeginInvoke((Action)delegate
+                        {
+                            if (generation != hotApplyGeneration) return;
+                            isHotApplyRunning = false;
+                            UpdateActivationStepButtons();
+                        });
+                    }
                 }
             });
         }
 
-        private void PrepareSelectedNodesPlan()
+        private void PrepareSelectedNodesPlanLegacy()
         {
             List<Dictionary<string, object>> selectedList = new List<Dictionary<string, object>>();
             for (int i = 0; i < nodeCheckBoxes.Count; i++)
@@ -4737,6 +5028,13 @@ namespace AntigravityDesktopClient
 
         private void CommitPendingXiyouScriptAction()
         {
+            MessageBoxResult confirm = MessageBox.Show(
+                "安全写入前必须从西游云托盘菜单彻底退出客户端。\n\n确认西游云已经完全退出吗？",
+                "写入西游云覆写脚本",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+
             txtProxySyncStatus.Text = "正在检查西游云运行状态并执行安全写入...";
             txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
 
@@ -4811,9 +5109,65 @@ namespace AntigravityDesktopClient
             });
         }
 
+        private void RollbackPendingXiyouScriptAction()
+        {
+            MessageBoxResult confirm = MessageBox.Show(
+                "恢复备份前必须彻底退出西游云，否则西游云可能再次覆盖配置。\n\n确认已经退出西游云并继续恢复吗？",
+                "恢复西游云配置",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            txtProxySyncStatus.Text = "正在恢复本次写入前的西游云配置...";
+            txtProxySyncStatus.Foreground = new SolidColorBrush(ColPrimary);
+
+            ThreadPool.QueueUserWorkItem((st) =>
+            {
+                try
+                {
+                    string res = SendApiPost("api/network/rollback-pending", "{}");
+                    var dict = jsonSerializer.Deserialize<Dictionary<string, object>>(res);
+                    string msg = dict != null && dict.ContainsKey("message") ? dict["message"].ToString() : "已恢复备份";
+
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        currentActivationState = "inactive";
+                        currentPendingEgressPlanList = null;
+                        currentActiveEgressPlanList = null;
+                        currentEgressPlanList = null;
+                        txtProxySyncStatus.Text = "✓ " + msg;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColGreen);
+                        UpdateActivationStepButtons();
+                        RenderEgressPlanCards(null);
+                        ShowToast("已恢复西游云写入前备份");
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.Invoke((Action)delegate
+                    {
+                        txtProxySyncStatus.Text = "⚠️ 恢复备份失败: " + ex.Message;
+                        txtProxySyncStatus.Foreground = new SolidColorBrush(ColRed);
+                        MessageBox.Show(ex.Message, "恢复西游云配置失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                    });
+                }
+            });
+        }
+
         private void UpdateActivationStepButtons()
         {
-            if (btnPreparePlan == null || btnCommitPending == null || btnVerifyActivation == null) return;
+            if (btnPreparePlan == null || btnCommitPending == null || btnVerifyActivation == null || btnRollbackActivation == null) return;
+
+            btnPreparePlan.IsEnabled = !isHotApplyRunning;
+            btnPreparePlan.Background = new SolidColorBrush(isHotApplyRunning ? ColCardMuted : ColPrimary);
+            btnPreparePlan.Foreground = isHotApplyRunning ? new SolidColorBrush(ColTextMuted) : System.Windows.Media.Brushes.White;
+            btnCommitPending.IsEnabled = false;
+            btnVerifyActivation.IsEnabled = false;
+            btnRollbackActivation.IsEnabled = currentActivationState == "awaiting_save" || currentActivationState == "waiting_restart" || currentActivationState == "failed";
+            btnRollbackActivation.Background = btnRollbackActivation.IsEnabled ? new SolidColorBrush(ColRed) : new SolidColorBrush(ColCardMuted);
+            btnRollbackActivation.Foreground = btnRollbackActivation.IsEnabled ? System.Windows.Media.Brushes.White : new SolidColorBrush(ColTextMuted);
+
+            if (btnCommitPending.Visibility == Visibility.Collapsed && btnVerifyActivation.Visibility == Visibility.Collapsed) return;
 
             if (currentActivationState == "inactive")
             {
@@ -4826,8 +5180,8 @@ namespace AntigravityDesktopClient
             }
             else if (currentActivationState == "prepared")
             {
-                btnPreparePlan.Background = new SolidColorBrush(ColCardMuted);
-                btnPreparePlan.Foreground = new SolidColorBrush(ColTextMain);
+                btnPreparePlan.Background = new SolidColorBrush(ColPrimary);
+                btnPreparePlan.Foreground = System.Windows.Media.Brushes.White;
                 btnCommitPending.Background = new SolidColorBrush(ColAmber);
                 btnCommitPending.Foreground = System.Windows.Media.Brushes.White;
                 btnVerifyActivation.Background = new SolidColorBrush(ColCardMuted);
@@ -4850,6 +5204,15 @@ namespace AntigravityDesktopClient
                 btnCommitPending.Foreground = new SolidColorBrush(ColTextMuted);
                 btnVerifyActivation.Background = new SolidColorBrush(ColGreen);
                 btnVerifyActivation.Foreground = System.Windows.Media.Brushes.White;
+            }
+            else if (currentActivationState == "failed")
+            {
+                btnPreparePlan.Background = new SolidColorBrush(ColCardMuted);
+                btnPreparePlan.Foreground = new SolidColorBrush(ColTextMain);
+                btnCommitPending.Background = new SolidColorBrush(ColCardMuted);
+                btnCommitPending.Foreground = new SolidColorBrush(ColTextMuted);
+                btnVerifyActivation.Background = new SolidColorBrush(ColCardMuted);
+                btnVerifyActivation.Foreground = new SolidColorBrush(ColTextMuted);
             }
         }
 
@@ -4886,7 +5249,7 @@ namespace AntigravityDesktopClient
                                 }
                                 currentPendingEgressPlanList = ns.ContainsKey("pendingEgressPlan") ? ns["pendingEgressPlan"] as ArrayList : null;
                                 currentActiveEgressPlanList = egressPlan;
-                                currentEgressPlanList = currentActivationState == "prepared" || currentActivationState == "waiting_restart"
+                                currentEgressPlanList = currentActivationState == "prepared" || currentActivationState == "awaiting_save" || currentActivationState == "waiting_restart"
                                     ? (currentPendingEgressPlanList != null && currentPendingEgressPlanList.Count > 0 ? currentPendingEgressPlanList : egressPlan)
                                     : egressPlan;
                                 UpdateActivationStepButtons();
@@ -4895,6 +5258,54 @@ namespace AntigravityDesktopClient
                                 else rbProxyModeIsolated.IsChecked = true;
 
                                 if (ns.ContainsKey("subscriptionUrl")) txtProxySubUrl.Text = ns["subscriptionUrl"].ToString();
+
+                                currentFetchedNodes.Clear();
+                                var cachedNodes = ns.ContainsKey("candidateNodes") ? ns["candidateNodes"] as ArrayList : null;
+                                if (cachedNodes != null)
+                                {
+                                    foreach (var item in cachedNodes)
+                                    {
+                                        var node = item as Dictionary<string, object>;
+                                        if (node != null) currentFetchedNodes.Add(node);
+                                    }
+                                }
+
+                                nodeLatencies.Clear();
+                                nodeLatencyLabels.Clear();
+                                var cachedMeasurements = ns.ContainsKey("nodeMeasurements") ? ns["nodeMeasurements"] as Dictionary<string, object> : null;
+                                if (cachedMeasurements != null)
+                                {
+                                    foreach (var kvp in cachedMeasurements)
+                                    {
+                                        var detail = kvp.Value as Dictionary<string, object>;
+                                        if (detail == null) continue;
+                                        int value = 0;
+                                        bool ok = detail.ContainsKey("ok") && Convert.ToBoolean(detail["ok"]);
+                                        if (ok && detail.ContainsKey("valueMs") && detail["valueMs"] != null) int.TryParse(detail["valueMs"].ToString(), out value);
+                                        nodeLatencies[kvp.Key] = ok && value > 0 ? value : -1;
+                                        nodeLatencyLabels[kvp.Key] = detail.ContainsKey("label") ? detail["label"].ToString() : (ok ? "节点测速" : "节点测速超时");
+                                    }
+                                }
+
+                                selectedCandidateNodeIds.Clear();
+                                var savedSelection = ns.ContainsKey("selectedNodes") ? ns["selectedNodes"] as ArrayList : null;
+                                if (savedSelection != null && savedSelection.Count > 0)
+                                {
+                                    for (int i = 0; i < savedSelection.Count; i++)
+                                    {
+                                        var selectedNode = savedSelection[i] as Dictionary<string, object>;
+                                        if (selectedNode != null) selectedCandidateNodeIds.Add(GetCandidateNodeId(selectedNode, i));
+                                    }
+                                }
+                                else
+                                {
+                                    for (int i = 0; i < currentFetchedNodes.Count; i++)
+                                    {
+                                        var candidate = currentFetchedNodes[i];
+                                        if (candidate.ContainsKey("recommended") && Convert.ToBoolean(candidate["recommended"])) selectedCandidateNodeIds.Add(GetCandidateNodeId(candidate, i));
+                                    }
+                                }
+                                hasCandidateSelection = true;
 
                                 if (ns.ContainsKey("customNodes"))
                                 {
@@ -4928,8 +5339,19 @@ namespace AntigravityDesktopClient
                                     panelImportSubLink.Visibility = Visibility.Collapsed;
                                     panelImportAccount.Visibility = Visibility.Visible;
                                 }
+
+                                if (currentFetchedNodes.Count > 0)
+                                {
+                                    cardNodeSelector.Visibility = Visibility.Visible;
+                                    string lastTestText = "";
+                                    DateTime lastTestAt;
+                                    if (ns.ContainsKey("lastLatencyTestAt") && DateTime.TryParse(ns["lastLatencyTestAt"].ToString(), out lastTestAt))
+                                        lastTestText = "，上次测速 " + lastTestAt.ToLocalTime().ToString("M月d日 HH:mm");
+                                    txtNodeSelectorSummary.Text = string.Format("已从本地恢复 {0} 个节点{1}；可点击 ⚡ 单独测速，或手动刷新全部延迟：", currentFetchedNodes.Count, lastTestText);
+                                    RenderAvailableNodesSelector();
+                                }
                             }
-                            RenderEgressPlanCards(egressPlan);
+                            RenderEgressPlanCards(currentEgressPlanList);
                         });
                     }
                 }
@@ -4966,7 +5388,7 @@ namespace AntigravityDesktopClient
                 };
                 TextBlock tbEmp = new TextBlock
                 {
-                    Text = "尚未同步独立通道。请点击上方“解析并优选节点”，勾选后点击激活。",
+                    Text = "尚未激活独立通道。请先解析节点，再按 ①生成 → ②退出西游云后写入 → ③重开后验证 操作。",
                     FontSize = 12,
                     Foreground = new SolidColorBrush(ColTextMuted),
                     HorizontalAlignment = HorizontalAlignment.Center
@@ -5043,7 +5465,7 @@ namespace AntigravityDesktopClient
                         Padding = new Thickness(5, 1, 5, 1),
                         Margin = new Thickness(0, 0, 6, 0)
                     };
-                    latB.Child = new TextBlock { Text = lat > 0 ? string.Format("{0} {1}ms", latencyLabel, lat) : latencyLabel + " 超时", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(lat > 0 ? (lat < 150 ? ColGreen : ColAmber) : ColRed) };
+                    latB.Child = new TextBlock { Text = lat > 0 ? string.Format("全链路 {0}ms", lat) : "全链路超时", FontSize = 9.5, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(lat > 0 ? (lat < 150 ? ColGreen : ColAmber) : ColRed) };
                     rightPills.Children.Add(latB);
                 }
 
@@ -5305,15 +5727,15 @@ namespace AntigravityDesktopClient
             }
             catch { }
 
-            if (cbNodes.Items.Count == 0)
+            bool isReadyForOAuth = cbNodes.Items.Count > 0;
+            if (!isReadyForOAuth)
             {
-                cbNodes.Items.Add(new ProxyNodeItem { Text = "[RULE] 🌐 默认网络", Port = 7888, Name = "默认网络 / 规则分流" });
+                cbNodes.Items.Add("没有已验证的独立出口，请先完成西游云三步激活");
+                cbNodes.IsEnabled = false;
             }
 
             cbNodes.SelectedIndex = 0;
             sp.Children.Add(cbNodes);
-
-            bool isReadyForOAuth = currentActivationState == "active" || cbNodes.Items.Count > 1;
 
             Border tipCard = new Border
             {
@@ -5326,7 +5748,9 @@ namespace AntigravityDesktopClient
             };
             TextBlock tbTip = new TextBlock
             {
-                Text = "💡 启动后浏览器将自动打开两个标签页：\nTab 1 访问 ip.sb 秒开验证当前真实出口 IP；\nTab 2 访问 Google 登录页。肉眼确认 IP 安全后再输入密码！",
+                Text = isReadyForOAuth
+                    ? "💡 启动后浏览器将自动打开两个标签页：\nTab 1 访问 ip.sb 秒开验证当前真实出口 IP；\nTab 2 访问 Google 登录页。肉眼确认 IP 安全后再输入密码！"
+                    : "⚠ 当前没有已验证的西游云独立端口。为防止账号误走默认节点，本次登录已被禁用。",
                 FontSize = 11.5,
                 Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(156, 163, 175)),
                 TextWrapping = TextWrapping.Wrap
@@ -5348,6 +5772,7 @@ namespace AntigravityDesktopClient
 
             Button btnConfirm = CreateButton("🚀 启动安全隔离浏览器登录", ColPrimary, System.Windows.Media.Brushes.White, 12, true);
             btnConfirm.Padding = new Thickness(18, 6, 18, 6);
+            btnConfirm.IsEnabled = isReadyForOAuth;
             btnConfirm.Click += (s, e) =>
             {
                 var sel = cbNodes.SelectedItem as ProxyNodeItem;
@@ -5495,6 +5920,59 @@ namespace AntigravityDesktopClient
         }
 
         private const int SW_RESTORE = 9;
+
+        private void SetClipboardTextWithRetry(string text)
+        {
+            Exception lastError = null;
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                try
+                {
+                    System.Windows.Clipboard.SetText(text);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Thread.Sleep(60);
+                }
+            }
+            throw new Exception("无法写入剪贴板，请关闭占用剪贴板的程序后重试", lastError);
+        }
+
+        private void ClearClipboardIfUnchanged(string expectedText)
+        {
+            try
+            {
+                if (System.Windows.Clipboard.ContainsText() && System.Windows.Clipboard.GetText() == expectedText)
+                {
+                    System.Windows.Clipboard.Clear();
+                }
+            }
+            catch { }
+        }
+
+        private bool FocusXiyouWindow()
+        {
+            string[] processNames = new string[] { "XiyouYun", "Bettbox" };
+            foreach (string processName in processNames)
+            {
+                Process[] processes = Process.GetProcessesByName(processName);
+                foreach (Process process in processes)
+                {
+                    try
+                    {
+                        if (process.MainWindowHandle == IntPtr.Zero) continue;
+                        ShowWindow(process.MainWindowHandle, SW_RESTORE);
+                        SetForegroundWindow(process.MainWindowHandle);
+                        return true;
+                    }
+                    catch { }
+                    finally { process.Dispose(); }
+                }
+            }
+            return false;
+        }
 
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);

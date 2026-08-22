@@ -688,74 +688,34 @@ export function createXiyouOverrideScript(egressPlan = []) {
   const desiredListeners = ${JSON.stringify(listeners)};
   const managedProxyNames = new Set(customProxies.map(proxy => proxy.name));
 
-  // 1. 注入自定义代理 (如带严格新加坡专线链式中转的静态 ISP)
+  // 1. 注入自定义代理；跳板不存在时不生成错误链路，后续 Listener 校验会明确失败。
   config.proxies = config.proxies.filter(proxy => !proxy || !managedProxyNames.has(proxy.name));
   const baseProxyNames = new Set(config.proxies.map(proxy => proxy && proxy.name).filter(Boolean));
   for (const proxy of customProxies) {
     if (proxy["dialer-proxy"] && !baseProxyNames.has(proxy["dialer-proxy"])) {
-      // 严格检查：必须能匹配到明确的新加坡跳板节点
-      const matchedSg = config.proxies.find(p => p && p.name && (p.name.includes("新加坡") || p.name.includes("IEPL")));
-      if (matchedSg) proxy["dialer-proxy"] = matchedSg.name;
+      continue;
     }
     config.proxies.push(proxy);
   }
 
-  // 1.5 将自定义代理注入到所有策略组中，确保西游云客户端界面也能直接看到并选择
-  if (config["proxy-groups"] && Array.isArray(config["proxy-groups"])) {
-    config["proxy-groups"].forEach(group => {
-      if (group && Array.isArray(group.proxies)) {
-        for (const proxy of customProxies) {
-          if (!group.proxies.includes(proxy.name)) {
-            group.proxies.push(proxy.name);
-          }
-        }
-      }
-    });
-  }
+  const availableProxyNames = new Set(config.proxies.map(proxy => proxy && proxy.name).filter(Boolean));
 
-  // 2. 辅助函数：智能精准匹配目标节点名称
-  function matchProxyName(targetName, targetRegion) {
-    if (!targetName) return null;
-    const exact = config.proxies.find(p => p && p.name === targetName);
-    if (exact) return exact.name;
-
-    const trimmed = targetName.trim().toLowerCase();
-    const matchTrimmed = config.proxies.find(p => p && p.name && p.name.trim().toLowerCase() === trimmed);
-    if (matchTrimmed) return matchTrimmed.name;
-
-    const normTarget = targetName.replace(/[\\s\\-_｜|#\\d]/g, "");
-    const matchFuzzy = config.proxies.find(p => {
-      if (!p || !p.name) return false;
-      const normP = p.name.replace(/[\\s\\-_｜|#\\d]/g, "");
-      return normP.includes(normTarget) || normTarget.includes(normP);
-    });
-    if (matchFuzzy) return matchFuzzy.name;
-
-    if (targetRegion) {
-      const matchRegion = config.proxies.find(p => p && p.name && p.name.includes(targetRegion));
-      if (matchRegion) return matchRegion.name;
-    }
-
-    return null;
-  }
-
-  // 3. 清除所有历史遗留 Listener (包括 abc-egress-*, mixed-*, port-*)
+  // 2. 只替换本项目管理的 Listener，不触碰用户或西游云自己的 Listener。
   config.listeners = config.listeners.filter(listener => {
     const lName = String(listener && listener.name || "");
-    return !lName.startsWith("abc-egress-") && !lName.startsWith("mixed-") && !lName.startsWith("port-");
+    return !lName.startsWith("abc-egress-");
   });
 
-  // 4. 为每个独立端口精准绑定对应的节点出口！
+  // 3. 只允许精确名称绑定。绝不按地区或去数字模糊匹配，避免账号串线。
   for (const item of desiredListeners) {
-    const boundProxy = matchProxyName(item.proxy, item.region);
-    if (boundProxy) {
+    if (availableProxyNames.has(item.proxy)) {
       config.listeners.push({
         name: item.name,
         type: "mixed",
         port: Number(item.port),
         listen: "127.0.0.1",
         udp: false,
-        proxy: boundProxy
+        proxy: item.proxy
       });
     }
   }
@@ -774,7 +734,10 @@ export function inspectXiyouPreferences(rawText) {
     const scriptProps = flutterConfig.scriptProps || {};
     const scripts = Array.isArray(scriptProps.scripts) ? scriptProps.scripts : [];
     const currentId = scriptProps.currentId || null;
-    const activeScript = scripts.find((s) => s.id === currentId || s.id === "abc-multi-proxy-script") || null;
+    const selectedScript = scripts.find((s) => s.id === currentId) || null;
+    const activeScript = selectedScript?.id === "abc-multi-proxy-script" || selectedScript?.label === "Antigravity多端口并发代理脚本"
+      ? selectedScript
+      : scripts.find((s) => s.id === "abc-multi-proxy-script" || s.label === "Antigravity多端口并发代理脚本") || null;
     const content = activeScript?.content || activeScript?.code || "";
     const scriptHash = content ? crypto.createHash("sha256").update(content).digest("hex") : "";
 
@@ -783,7 +746,7 @@ export function inspectXiyouPreferences(rawText) {
       currentId,
       scriptCount: scripts.length,
       hasAbcScript: Boolean(activeScript),
-      isActive: currentId === "abc-multi-proxy-script",
+      isActive: Boolean(activeScript && activeScript.id === currentId),
       scriptHash,
     };
   } catch (e) {

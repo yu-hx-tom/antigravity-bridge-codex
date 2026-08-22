@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -104,6 +105,67 @@ test("local dashboard serves a protected API and allows live model switching", {
     assert.equal(preservedAuth.tokens?.test, "user-session");
   } finally {
     child.kill();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("imported subscription nodes survive a Bridge restart", { timeout: 20_000 }, async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ag-node-cache-"));
+  const liveCodexHome = path.join(dataDir, "live-codex-home");
+  const subscriptionServer = http.createServer((_request, response) => {
+    response.end('proxies:\n  - name: "新加坡 | 测试专线"\n    type: trojan\n    server: 203.0.113.10\n    port: 443\n    password: test\n    sni: example.com\n');
+  });
+  await new Promise((resolve) => subscriptionServer.listen(0, "127.0.0.1", resolve));
+  const subscriptionUrl = `http://127.0.0.1:${subscriptionServer.address().port}/subscription`;
+  await fs.mkdir(liveCodexHome, { recursive: true });
+  await fs.writeFile(path.join(dataDir, "settings.json"), JSON.stringify({
+    clientKey: "cache-client-secret",
+    managementKey: "cache-management-secret",
+    uiKey: "cache-ui-secret",
+    codexHome: liveCodexHome,
+  }));
+
+  let child;
+  try {
+    const firstPort = await freePort();
+    child = spawn(process.execPath, ["server.mjs"], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      env: { ...process.env, BRIDGE_DATA_DIR: dataDir, BRIDGE_CODEX_HOME: liveCodexHome, BRIDGE_PORT: String(firstPort), BRIDGE_NO_OPEN: "1" },
+      stdio: "ignore",
+    });
+    await waitForPage(`http://127.0.0.1:${firstPort}/`);
+    const imported = await fetch(`http://127.0.0.1:${firstPort}/api/network/fetch-nodes`, {
+      method: "POST",
+      headers: { "X-Bridge-Key": "cache-ui-secret", "Content-Type": "application/json" },
+      body: JSON.stringify({ subscriptionUrl }),
+    });
+    assert.equal(imported.status, 200);
+    assert.equal((await imported.json()).nodes.length, 1);
+    child.kill();
+    await new Promise((resolve) => child.once("exit", resolve));
+
+    const storedBeforeRestart = JSON.parse(await fs.readFile(path.join(dataDir, "settings.json"), "utf8"));
+    storedBeforeRestart.networkSettings.activation = { state: "prepared", scriptHash: "draft-only" };
+    storedBeforeRestart.networkSettings.pendingEgressPlan = [{ id: "draft", port: 7892 }];
+    await fs.writeFile(path.join(dataDir, "settings.json"), JSON.stringify(storedBeforeRestart));
+
+    const secondPort = await freePort();
+    child = spawn(process.execPath, ["server.mjs"], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      env: { ...process.env, BRIDGE_DATA_DIR: dataDir, BRIDGE_CODEX_HOME: liveCodexHome, BRIDGE_PORT: String(secondPort), BRIDGE_NO_OPEN: "1" },
+      stdio: "ignore",
+    });
+    await waitForPage(`http://127.0.0.1:${secondPort}/`);
+    const restored = await fetch(`http://127.0.0.1:${secondPort}/api/network/settings`, { headers: { "X-Bridge-Key": "cache-ui-secret" } });
+    const settings = await restored.json();
+    assert.equal(settings.networkSettings.subscriptionUrl, subscriptionUrl);
+    assert.equal(settings.networkSettings.candidateNodes.length, 1);
+    assert.equal(settings.networkSettings.candidateNodes[0].name, "新加坡 | 测试专线");
+    assert.equal(settings.networkSettings.activation.state, "inactive");
+    assert.equal(settings.networkSettings.pendingEgressPlan.length, 0);
+  } finally {
+    if (child && child.exitCode === null) child.kill();
+    await new Promise((resolve) => subscriptionServer.close(resolve));
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });

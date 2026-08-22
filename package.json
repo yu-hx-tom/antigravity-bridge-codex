@@ -1,13 +1,12 @@
 {
   "name": "antigravity-bridge-codex",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test \"test/*.test.mjs\"",
-    "check": "node --check server.mjs && node --check subscription.mjs && node --check mihomo-config.mjs && node --check mihomo-manager.mjs && node --check mihomo-runtime.mjs && node --check telemetry.mjs && node --check core.mjs && node --check history.mjs && node --check protocol.mjs && node --check transaction.mjs && node --check public/app.js && node --check scripts/install-mihomo.mjs && node --check scripts/build-exe.mjs",
-    "install:mihomo": "node scripts/install-mihomo.mjs --root-bin",
+    "check": "node --check server.mjs && node --check subscription.mjs && node --check telemetry.mjs && node --check xiyou-runtime.mjs && node --check core.mjs && node --check history.mjs && node --check protocol.mjs && node --check transaction.mjs && node --check public/app.js && node --check scripts/inject-xiyou-script.mjs && node --check scripts/build-exe.mjs",
     "build:exe": "node scripts/build-exe.mjs",
     "verify:catalog": "node scripts/verify-codex-catalog.mjs",
     "verify:live": "node scripts/verify-live.mjs",

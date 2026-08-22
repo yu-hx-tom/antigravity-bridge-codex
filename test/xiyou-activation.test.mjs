@@ -90,3 +90,23 @@ test("Patch and Inspect Xiyouyun Preferences", () => {
   assert.equal(inspect.isActive, true);
   assert.equal(inspect.scriptHash, expectedHash);
 });
+
+test("Inspect accepts a manually created active Antigravity script", () => {
+  const scriptCode = "function main(config) { return config; }";
+  const preferences = JSON.stringify({
+    "flutter.config": JSON.stringify({
+      scriptProps: {
+        currentId: "xiyou-generated-id",
+        scripts: [{
+          id: "xiyou-generated-id",
+          label: "Antigravity多端口并发代理脚本",
+          content: scriptCode,
+        }],
+      },
+    }),
+  });
+
+  const inspect = inspectXiyouPreferences(preferences);
+  assert.equal(inspect.isActive, true);
+  assert.equal(inspect.scriptHash, crypto.createHash("sha256").update(scriptCode).digest("hex"));
+});

@@ -44,25 +44,21 @@ import {
   scanLocalSubscriptionUrls,
   pickRecommendedNodes,
   buildPlanFromSelectedNodes,
-  buildMultiPortEgressPlan,
   selectSingaporeRelay,
   findActivatedEgress,
   createXiyouOverrideScript,
   computeNodeFingerprint,
   patchXiyouPreferences,
   inspectXiyouPreferences,
-  findLocalRawProfileContent,
 } from "./subscription.mjs";
-import { compileMihomoConfig, parseMihomoSource } from "./mihomo-config.mjs";
-import { globalMihomoManager } from "./mihomo-manager.mjs";
-import { MihomoRuntimeCoordinator } from "./mihomo-runtime.mjs";
 import { globalTelemetryCollector, extractOutputTokenUsage, estimateOutputTokensFromText } from "./telemetry.mjs";
+import { parseXiyouPreferences } from "./xiyou-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
 const CLIPROXY_LOCK_PATH = path.join(ROOT, "cliproxy.lock.json");
-const APP_VERSION = "0.4.1";
+const APP_VERSION = "0.5.0";
 const UI_HOST = "127.0.0.1";
 const UI_PORT = Number(process.env.BRIDGE_PORT || 8787);
 const DATA_DIR = path.resolve(
@@ -137,9 +133,12 @@ function defaultSettings() {
     accountProxies: {},
     networkSettings: {
       mode: "isolated",
+      backend: "xiyouyun",
       subscriptionUrl: "",
       customIspText: "",
       customNodes: [],
+      candidateNodes: [],
+      nodeMeasurements: {},
       selectedNodes: [],
       egressPlan: [],
       pendingEgressPlan: [],
@@ -151,9 +150,11 @@ function defaultSettings() {
         preparedAt: null,
         writtenAt: null,
         verifiedAt: null,
+        backupPath: "",
         failure: "",
       },
       lastSyncedAt: null,
+      lastLatencyTestAt: null,
     },
     codexActiveBackup: "",
     codexApiPrepared: false,
@@ -199,8 +200,21 @@ async function initialize() {
     managementKey: stored.managementKey || defaults.managementKey,
     uiKey: stored.uiKey || defaults.uiKey,
   };
+  if (runtime.settings.networkSettings.backend === "embedded-mihomo") {
+    runtime.settings.networkSettings.egressPlan = [];
+    runtime.settings.networkSettings.pendingEgressPlan = [];
+    runtime.settings.networkSettings.activation = { ...defaults.networkSettings.activation };
+  }
+  if (runtime.settings.networkSettings.activation?.state === "prepared") {
+    runtime.settings.networkSettings.pendingEgressPlan = [];
+    runtime.settings.networkSettings.activation = { ...defaults.networkSettings.activation };
+  }
+  runtime.settings.networkSettings.backend = "xiyouyun";
   runtime.egressPlan = Array.isArray(runtime.settings.networkSettings.egressPlan)
     ? runtime.settings.networkSettings.egressPlan
+    : [];
+  runtime.candidateNodes = Array.isArray(runtime.settings.networkSettings.candidateNodes)
+    ? runtime.settings.networkSettings.candidateNodes
     : [];
   runtime.quotas = await readJson(QUOTA_CACHE_PATH, {});
   await saveSettings();
@@ -1006,14 +1020,36 @@ async function applyAccountRouting() {
 const pendingOAuthStates = new Map();
 
 function getClashConfigDir() {
+  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
   const candidates = [
-    path.join(os.homedir(), "AppData", "Roaming", "com.appshub", "XiyouYun"),
-    path.join(os.homedir(), "AppData", "Roaming", "com.follow", "clash"),
-  ];
-  for (const c of candidates) {
-    if (fsSync.existsSync(path.join(c, "shared_preferences.json"))) return c;
+    process.env.XIYOUYUN_CONFIG_DIR,
+    path.join(appData, "com.appshub", "XiyouYun"),
+    path.join(appData, "com.follow", "clash"),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (fsSync.existsSync(path.join(resolved, "shared_preferences.json"))) return resolved;
   }
-  return candidates[0];
+  return path.resolve(candidates[0]);
+}
+
+function getXiyouPreferencesPath() {
+  return path.join(getClashConfigDir(), "shared_preferences.json");
+}
+
+async function getXiyouRuntimeStatus() {
+  const preferencesPath = getXiyouPreferencesPath();
+  let script = { ok: false, isActive: false, hasAbcScript: false, scriptHash: "" };
+  if (fsSync.existsSync(preferencesPath)) {
+    script = inspectXiyouPreferences(await fs.readFile(preferencesPath, "utf8"));
+  }
+  return {
+    installed: fsSync.existsSync(preferencesPath),
+    running: await isXiyouProcessesRunning(),
+    coreRunning: await isXiyouCoreRunning(),
+    preferencesPath,
+    script,
+  };
 }
 
 async function detectActiveProxyPort() {
@@ -1131,20 +1167,87 @@ export function measureHttpProxyRealLatency(proxyPort, targetHost = "cp.cloudfla
   });
 }
 
-export async function pingNodesList(nodes = []) {
+export function parseXiyouControllerConfig(text = "") {
+  const controller = String(text.match(/^\s*external-controller\s*:\s*["']?([^\r\n"']+)/mi)?.[1] || "").trim();
+  if (!controller) return null;
+  const secret = String(text.match(/^\s*secret\s*:\s*["']?([^\r\n"']*)/mi)?.[1] || "").trim();
+  const normalized = /^https?:\/\//i.test(controller) ? controller : `http://${controller}`;
+  try {
+    const url = new URL(normalized);
+    if (url.hostname === "0.0.0.0" || url.hostname === "::") url.hostname = "127.0.0.1";
+    return { baseUrl: url.toString().replace(/\/$/, ""), secret };
+  } catch {
+    return null;
+  }
+}
+
+function readXiyouControllerConfig() {
+  if (process.env.BRIDGE_DISABLE_XIYOU_CONTROLLER === "1") return null;
+  try {
+    const preferencesPath = getXiyouPreferencesPath();
+    if (fsSync.existsSync(preferencesPath)) {
+      const preferences = parseXiyouPreferences(fsSync.readFileSync(preferencesPath, "utf8"));
+      if (preferences.controller) return preferences.controller;
+    }
+  } catch {}
+  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  const roots = [getClashConfigDir(), path.join(appData, "com.follow", "clash")];
+  const candidates = roots.map((root) => path.join(root, "config.yaml"));
+  for (const root of roots) {
+    const profilesDir = path.join(root, "profiles");
+    if (!fsSync.existsSync(profilesDir)) continue;
+    const profiles = fsSync.readdirSync(profilesDir)
+      .filter((name) => /\.ya?ml$/i.test(name))
+      .map((name) => path.join(profilesDir, name))
+      .sort((a, b) => fsSync.statSync(b).mtimeMs - fsSync.statSync(a).mtimeMs);
+    candidates.push(...profiles);
+  }
+
+  for (const configPath of [...new Set(candidates)]) {
+    if (!fsSync.existsSync(configPath)) continue;
+    const parsed = parseXiyouControllerConfig(fsSync.readFileSync(configPath, "utf8"));
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+async function probeXiyouNodeDelay(proxyName, timeoutMs = 5000, controller = readXiyouControllerConfig()) {
+  if (!controller || !proxyName) return { ok: false, unavailable: true, error: "西游云测速接口不可用" };
+
+  for (const target of ["https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"]) {
+    try {
+      const endpoint = `${controller.baseUrl}/proxies/${encodeURIComponent(proxyName)}/delay?timeout=${timeoutMs}&url=${encodeURIComponent(target)}`;
+      const response = await fetch(endpoint, {
+        headers: controller.secret ? { Authorization: `Bearer ${controller.secret}` } : {},
+        signal: AbortSignal.timeout(timeoutMs + 1000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      const delay = Number(payload.delay) || 0;
+      if (response.ok && delay > 0) return { ok: true, delay, target };
+    } catch {}
+  }
+  return { ok: false, error: "节点测速超时" };
+}
+
+export async function pingNodesList(nodes = [], { scope = "auto", persist = false } = {}) {
   const results = {};
   const measurements = {};
   let successCount = 0;
   let failedCount = 0;
   let inactiveCount = 0;
+  const controller = scope === "candidates" ? readXiyouControllerConfig() : null;
 
-  await Promise.all(
-    nodes.map(async (n) => {
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= nodes.length) return;
+      const n = nodes[index];
       const key = String(n.id || n.name || n.port || "");
-      if (!key) return;
+      if (!key) continue;
 
       // 候选节点若已绑定独立 Listener，直接测这个 Listener 的真实代理全链路。
-      const activeEgress = findActivatedEgress(n, runtime.egressPlan);
+      const activeEgress = scope !== "candidates" && findActivatedEgress(n, runtime.egressPlan);
       if (activeEgress) {
         const realChannelRtt = await measureHttpProxyRealLatency(activeEgress.port);
         const ok = realChannelRtt > 0;
@@ -1159,11 +1262,11 @@ export async function pingNodesList(nodes = []) {
           ok,
           active: true,
         };
-        return;
+        continue;
       }
 
       // 本地 Listener 端口测量的是包含中转与落地在内的真实 HTTP 全链路。
-      if (n.port && !n.server) {
+      if (scope !== "candidates" && n.port && !n.server) {
         const realChannelRtt = await measureHttpProxyRealLatency(n.port);
         const ok = realChannelRtt > 0;
         if (ok) successCount++;
@@ -1177,21 +1280,45 @@ export async function pingNodesList(nodes = []) {
           ok,
           active: true,
         };
-        return;
+        continue;
       }
 
-      // 未激活的订阅节点没有可独立选路的本地端口，不返回 0ms，返回 null 与 inactive
-      inactiveCount++;
-      results[key] = null;
-      measurements[key] = {
-        valueMs: null,
-        kind: "inactive",
-        label: "未激活",
-        ok: false,
-        active: false,
-      };
-    })
-  );
+      // 未激活节点借用西游云自己的 Controller URLTest；每批最多 5 个，绝不测 BGP 入口 TCP。
+      const nodeDelay = await probeXiyouNodeDelay(n.name, 5000, controller);
+      if (nodeDelay.ok) {
+        successCount++;
+        results[key] = nodeDelay.delay;
+        measurements[key] = {
+          valueMs: nodeDelay.delay,
+          kind: "xiyou-urltest",
+          label: `节点实测 ${nodeDelay.delay}ms`,
+          ok: true,
+          active: false,
+        };
+      } else {
+        if (nodeDelay.unavailable) inactiveCount++;
+        else failedCount++;
+        results[key] = null;
+        measurements[key] = {
+          valueMs: null,
+          kind: "xiyou-urltest",
+          label: nodeDelay.error,
+          ok: false,
+          active: false,
+        };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(5, nodes.length) }, () => worker()));
+
+  if (persist && scope === "candidates" && runtime.settings?.networkSettings) {
+    const testedAt = new Date().toISOString();
+    const cached = { ...(runtime.settings.networkSettings.nodeMeasurements || {}) };
+    for (const [key, measurement] of Object.entries(measurements)) cached[key] = { ...measurement, testedAt };
+    runtime.settings.networkSettings.nodeMeasurements = cached;
+    runtime.settings.networkSettings.lastLatencyTestAt = testedAt;
+    await saveSettings();
+  }
 
   return {
     ok: true,
@@ -1408,6 +1535,16 @@ async function fetchSubscriptionCandidateNodes(forceUrl = null, forceCustomIsp =
   // 自动排除不受支持地区（香港等），打标签并优选推荐 Top 5
   const scoredNodes = pickRecommendedNodes(allCandidates, 5);
   runtime.candidateNodes = scoredNodes;
+  const syncedAt = new Date().toISOString();
+  runtime.settings.networkSettings = {
+    ...netSettings,
+    ...(forceUrl !== null ? { subscriptionUrl: url } : {}),
+    ...(forceCustomIsp !== null ? { customIspText: customIspInput } : {}),
+    ...(forceCustomNodes !== null ? { customNodes: forceCustomNodes } : {}),
+    candidateNodes: scoredNodes,
+    lastSyncedAt: syncedAt,
+  };
+  await saveSettings();
 
   const isFallback = parsedNodes.length === 0;
   return {
@@ -1421,7 +1558,7 @@ async function fetchSubscriptionCandidateNodes(forceUrl = null, forceCustomIsp =
   };
 }
 
-export async function isXiyouProcessesRunning() {
+export async function isXiyouProcessesRunning({ strict = false } = {}) {
   if (process.platform !== "win32") return false;
   try {
     const { stdout } = await execFileAsync("tasklist.exe", ["/NH", "/FO", "CSV"], {
@@ -1431,7 +1568,8 @@ export async function isXiyouProcessesRunning() {
     });
     const lower = stdout.toLowerCase();
     return lower.includes("xiyouyun.exe") || lower.includes("xiyoucore.exe");
-  } catch {
+  } catch (error) {
+    if (strict) throw new Error(`无法确认西游云进程状态，已拒绝修改配置：${error.message}`);
     return false;
   }
 }
@@ -1463,7 +1601,7 @@ export function makeBodyPreview(body, max = 300) {
 export async function probeListenerPort(port, timeoutMs = 2000) {
   const start = Date.now();
   try {
-    const isListening = await globalMihomoManager.canConnect(port, timeoutMs);
+    const isListening = await canConnect(port, timeoutMs);
     const elapsedMs = Date.now() - start;
     if (isListening) {
       return { ok: true, stage: "listener", port, elapsedMs, errorType: null, errorMessage: null };
@@ -1474,77 +1612,7 @@ export async function probeListenerPort(port, timeoutMs = 2000) {
   }
 }
 
-export function getControllerPayload(res) {
-  if (!res) return {};
-  if (res.data && typeof res.data === "object") return res.data;
-  if (res.raw && typeof res.raw === "object") return res.raw;
-  return {};
-}
-
-export const CORE_DELAY_TARGETS = [
-  "https://www.gstatic.com/generate_204",
-  "https://cp.cloudflare.com/generate_204",
-];
-
-/**
- * Layer A: 调用 Mihomo Controller 探测节点本体延迟 (多目标主备策略)
- */
-export async function probeMihomoProxyDelay(proxyName, { controllerPort = 19090, timeoutMs = 5000 } = {}) {
-  const attempts = [];
-  if (!proxyName) {
-    return { ok: false, stage: "proxy_core", errorType: "proxy_not_found", errorMessage: "缺少节点代理名称", attempts };
-  }
-
-  for (const url of CORE_DELAY_TARGETS) {
-    const startedAt = Date.now();
-    try {
-      const targetUrl = encodeURIComponent(url);
-      const pathName = `/proxies/${encodeURIComponent(proxyName)}/delay?timeout=${timeoutMs}&url=${targetUrl}`;
-      const res = await globalMihomoManager.requestController(pathName, { timeoutMs: timeoutMs + 1000 });
-      const elapsedMs = Date.now() - startedAt;
-      const payload = getControllerPayload(res);
-      const attempt = {
-        target: url,
-        status: res?.status ?? null,
-        ok: Boolean(res?.ok),
-        elapsedMs,
-        delay: Number(payload?.delay) || null,
-        message: payload?.message || payload?.error || null,
-      };
-      attempts.push(attempt);
-
-      if (res?.ok) {
-        return {
-          ok: true,
-          stage: "proxy_core",
-          proxyName,
-          latencyMs: Number(payload?.delay) || elapsedMs,
-          attempts,
-          errorType: null,
-          errorMessage: null,
-        };
-      }
-    } catch (err) {
-      attempts.push({
-        target: url,
-        ok: false,
-        status: null,
-        message: err?.message || String(err),
-      });
-    }
-  }
-
-  const lastAttempt = attempts[attempts.length - 1];
-  return {
-    ok: false,
-    stage: "proxy_core",
-    proxyName,
-    attempts,
-    errorType: attempts.every((a) => String(a.message || "").includes("timeout")) ? "timeout" : "core_probe_failed",
-    errorMessage: `Controller 辅助探测失败: ${lastAttempt?.message || "DNS/握手超时"}`,
-  };
-}
-
+/** 通过西游云 Listener 进行真实公网探测。 */
 export const INTERNET_PROBE_TARGETS = [
   {
     name: "primary",
@@ -1586,7 +1654,7 @@ export function probeHttpThroughListener(proxyPort, target, timeoutMs = 4000) {
       host: "127.0.0.1",
       port: proxyPort,
       path: `http://${target.host}${target.path}`,
-      headers: { Host: target.host, "User-Agent": "Antigravity/0.4.1" },
+      headers: { Host: target.host, "User-Agent": "Antigravity/0.5.0" },
     }, (res) => {
       clearTimeout(timer);
       const elapsedMs = Date.now() - start;
@@ -1782,138 +1850,6 @@ export function probeGeoThroughListener(proxyPort, timeoutMs = 6000) {
   });
 }
 
-/**
- * 唯一出口四层严格核验入口 verifyOneEgress (指导第 2 & 8 条)
- */
-export async function verifyOneEgress(item, { controllerPort = 19090 } = {}) {
-  const port = Number(item.port);
-  const proxyName = item.proxyName || item.name || item.proxy || "";
-  const targetRegion = item.region || "";
-
-  const regionExpectedCode = {
-    "台湾": "TW",
-    "新加坡": "SG",
-    "美国": "US",
-    "日本": "JP",
-    "韩国": "KR",
-    "英国": "GB",
-    "德国": "DE",
-    "法国": "FR",
-    "加拿大": "CA",
-    "澳大利亚": "AU",
-  };
-  const expectedCode = regionExpectedCode[targetRegion] || null;
-
-  const result = {
-    ...item,
-    port,
-    proxyName,
-    state: "failed",
-    listenerOk: false,
-    proxyCoreOk: false,
-    internetOk: false,
-    geoOk: false,
-    verified: false,
-    latencyMs: null,
-    realGeo: null,
-    diagnostics: {
-      listener: null,
-      proxyCore: null,
-      internet: null,
-      geo: null,
-    },
-    error: null,
-  };
-
-  // 1. Layer B: Listener 探测 (硬门禁)
-  const lRes = await probeListenerPort(port, 1000);
-  result.diagnostics.listener = lRes;
-  result.listenerOk = lRes.ok;
-  if (!lRes.ok) {
-    result.state = "failed";
-    result.verified = false;
-    result.error = lRes.errorMessage;
-    return result;
-  }
-
-  // 2. Layer A: Proxy Core (Mihomo Controller 辅助探测，不提前 return)
-  const coreRes = await probeMihomoProxyDelay(proxyName, { controllerPort, timeoutMs: 5000 });
-  result.diagnostics.proxyCore = coreRes;
-  result.proxyCoreOk = coreRes.ok;
-  result.latencyMs = coreRes.latencyMs || null;
-
-  // 3. Layer C: Internet (通过 Listener 的多目标 204 探测)
-  let netRes = await probeInternetThroughListener(port, 5000);
-  result.diagnostics.internet = netRes;
-  result.internetOk = netRes.ok;
-
-  // 4. Layer D: Geo 探测
-  const geoRes = await probeGeoThroughListener(port, 5000);
-  result.diagnostics.geo = geoRes;
-
-  // 指导第 15 条：Geo 成功兜底 Internet (如果 204 探测 502/timeout，但 Geo 明确拿到了出口公网 IP)
-  if (!result.internetOk && geoRes.ok && geoRes.ip) {
-    result.internetOk = true;
-    result.diagnostics.internet = {
-      ...netRes,
-      ok: true,
-      recoveredBy: "geo_probe",
-      warning: "标准公网探测目标响应异常，但已通过 Geo 出口成功确认公网通达",
-    };
-  }
-
-  // 如果真实公网无法连通，判定为 failed
-  if (!result.internetOk) {
-    result.state = "failed";
-    result.verified = false;
-    result.error = result.diagnostics.internet?.errorMessage || "真实公网出口不可达";
-    return result;
-  }
-
-  // 5. 判定最终出口状态与地区匹配
-  const realCode = String(geoRes.countryCode || "").toUpperCase();
-  let geoOk = true;
-  let finalState = "active";
-  let mismatchReason = "";
-
-  if (expectedCode && realCode && realCode !== expectedCode && !item.isCustomIsp) {
-    // 地区明确不符合 (硬安全约束保留)
-    geoOk = false;
-    finalState = "failed";
-    mismatchReason = `预期出口为 [${expectedCode}/${targetRegion}]，实测出口为 [${realCode}/${geoRes.country || "未知"}]`;
-  } else if (!realCode || geoRes.isRateLimited || geoRes.errorType === "geo_service_error") {
-    // Geo 限流或未知，但公网正常 -> active_geo_unknown (usable)
-    geoOk = false;
-    finalState = "active_geo_unknown";
-    mismatchReason = "出口已连通，但 Geo 服务限流或未返回明确地区代码";
-  } else if (!result.proxyCoreOk) {
-    // 数据面通达，但 Controller 辅助探测异常 -> active_with_warning (usable)
-    geoOk = true;
-    finalState = "active_with_warning";
-    mismatchReason = coreRes.errorMessage || "Controller 辅助延迟探测失败";
-  } else {
-    geoOk = true;
-    finalState = "active";
-  }
-
-  result.geoOk = geoOk;
-  result.state = finalState;
-  result.verified = (finalState === "active" || finalState === "active_with_warning" || finalState === "active_geo_unknown");
-  result.realGeo = {
-    ip: geoRes.ip || "",
-    countryCode: realCode || "GLOBAL",
-    country: geoRes.country || (geoOk ? "" : "全球出口(待确认)"),
-    region: geoRes.region || "",
-    isp: geoRes.isp || "",
-  };
-  result.error = result.verified ? (finalState === "active" ? null : mismatchReason) : mismatchReason;
-
-  return result;
-}
-
-/**
- * 兼容原有接口：全链路出口探测
- */
 export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
   // 先执行 Layer C 验证 Internet
   const netRes = await probeInternetThroughListener(proxyPort, Math.min(timeoutMs, 4000));
@@ -1937,6 +1873,7 @@ export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
       country: geoRes.country,
       region: geoRes.region,
       isp: geoRes.isp,
+      latencyMs: netRes.latencyMs || null,
     };
   }
 
@@ -1950,6 +1887,7 @@ export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
       country: "全球节点 (Geo限流待确认)",
       region: "",
       isp: "",
+      latencyMs: netRes.latencyMs || null,
       warning: geoRes.errorMessage,
     };
   }
@@ -1962,30 +1900,33 @@ export async function probeProxyEgressGeo(proxyPort, timeoutMs = 6000) {
   };
 }
 
-export const mihomoRuntime = new MihomoRuntimeCoordinator({
-  dataDir: path.join(DATA_DIR, "mihomo"),
-  manager: globalMihomoManager,
-  verifyEgressFn: verifyOneEgress,
-  saveSettingsFn: saveSettings,
-  addLogFn: addLog,
-});
-
-/**
- * 阶段 1：生成待应用计划与覆写脚本，计算 SHA-256 (不碰西游云文件，不改生效 plan)
- */
 export async function prepareSelectedNodes(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
   const netSettings = { ...(runtime.settings.networkSettings || {}) };
   if (forceUrl !== null) netSettings.subscriptionUrl = String(forceUrl).trim();
   if (forceCustomIsp !== null) netSettings.customIspText = String(forceCustomIsp).trim();
   if (forceCustomNodes !== null) netSettings.customNodes = forceCustomNodes;
   netSettings.mode = "isolated";
+  netSettings.backend = "xiyouyun";
 
   let nodesToApply = selectedNodes;
   if (!nodesToApply || nodesToApply.length === 0) {
     const fetched = await fetchSubscriptionCandidateNodes(netSettings.subscriptionUrl, netSettings.customIspText, null, netSettings.customNodes);
     nodesToApply = fetched.nodes.filter((n) => n.recommended);
+    netSettings.candidateNodes = runtime.candidateNodes;
+    netSettings.lastSyncedAt = runtime.settings.networkSettings.lastSyncedAt;
   }
   if (nodesToApply.length === 0) throw new Error("没有可激活的真实节点");
+
+  const standardNames = nodesToApply
+    .filter((node) => !node.isCustomIsp)
+    .map((node) => String(node.name || "").trim());
+  if (standardNames.some((name) => !name)) {
+    throw new Error("存在缺少名称的订阅节点，无法与西游云配置精确绑定");
+  }
+  const duplicateNames = [...new Set(standardNames.filter((name, index) => standardNames.indexOf(name) !== index))];
+  if (duplicateNames.length > 0) {
+    throw new Error(`西游云节点名称重复，无法保证账号出口不串线：${duplicateNames.join("、")}`);
+  }
 
   let relay = selectSingaporeRelay([...nodesToApply, ...runtime.candidateNodes]);
   if (nodesToApply.some((node) => node.isCustomIsp) && !relay) {
@@ -2027,6 +1968,7 @@ export async function prepareSelectedNodes(selectedNodes = [], forceUrl = null, 
     preparedAt: new Date().toISOString(),
     writtenAt: null,
     verifiedAt: null,
+    backupPath: "",
     failure: "",
   };
 
@@ -2046,6 +1988,75 @@ export async function prepareSelectedNodes(selectedNodes = [], forceUrl = null, 
   };
 }
 
+export async function stagePendingXiyouHotApply() {
+  const netSettings = runtime.settings.networkSettings || {};
+  const activation = netSettings.activation || {};
+  const pendingPlan = netSettings.pendingEgressPlan || [];
+  if (!pendingPlan.length || !activation.scriptHash || activation.state !== "prepared") {
+    throw new Error("没有刚生成的待应用计划，请先选择节点");
+  }
+  if (!await isXiyouCoreRunning()) {
+    throw new Error("西游云当前未运行，请先启动西游云");
+  }
+
+  const prefsPath = getXiyouPreferencesPath();
+  if (!fsSync.existsSync(prefsPath)) throw new Error(`未找到西游云配置文件: ${prefsPath}`);
+  const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
+  const backupPath = path.join(path.dirname(prefsPath), `shared_preferences_backup_abc_${stamp}.json`);
+  await fs.copyFile(prefsPath, backupPath);
+
+  activation.state = "awaiting_save";
+  activation.backupPath = backupPath;
+  activation.stagedAt = new Date().toISOString();
+  activation.failure = "";
+  netSettings.activation = activation;
+  runtime.settings.networkSettings = netSettings;
+  await saveSettings();
+
+  const scriptCode = createXiyouOverrideScript(pendingPlan);
+  addLog("network", `新脚本已生成并备份原配置，等待西游云编辑器保存 (Hash: ${activation.scriptHash.slice(0, 8)})`);
+  return {
+    ok: true,
+    state: "awaiting_save",
+    scriptCode,
+    expectedPorts: activation.expectedPorts || pendingPlan.map((item) => Number(item.port)),
+    message: "脚本已复制。请在西游云的 Antigravity 脚本编辑器中全选、粘贴并保存；保存后会自动验证，无需重启西游云。",
+  };
+}
+
+export async function getPendingActivationReadiness() {
+  const netSettings = runtime.settings.networkSettings || {};
+  const activation = netSettings.activation || {};
+  const pendingPlan = netSettings.pendingEgressPlan || [];
+  const coreRunning = await isXiyouCoreRunning();
+  let scriptSaved = false;
+  try {
+    const prefsPath = getXiyouPreferencesPath();
+    const inspect = inspectXiyouPreferences(await fs.readFile(prefsPath, "utf8"));
+    scriptSaved = Boolean(inspect.isActive && inspect.scriptHash === activation.scriptHash);
+  } catch {}
+
+  const ports = await Promise.all(pendingPlan.map(async (item) => ({
+    port: Number(item.port),
+    alive: await canConnect(Number(item.port)),
+  })));
+  const portsReady = ports.length > 0 && ports.every((item) => item.alive);
+  const ready = Boolean(coreRunning && scriptSaved && portsReady);
+  let message = "等待在西游云编辑器中保存新脚本";
+  if (scriptSaved && !portsReady) message = "已检测到脚本保存，等待独立端口生效";
+  if (ready) message = "脚本和全部独立端口已生效，可以验证出口";
+  return {
+    ok: true,
+    state: activation.state || "inactive",
+    ready,
+    coreRunning,
+    scriptSaved,
+    portsReady,
+    ports,
+    message,
+  };
+}
+
 /**
  * 阶段 2：确认西游云已退出后，将标准脚本安全写入 shared_preferences.json
  */
@@ -2057,14 +2068,17 @@ export async function commitPendingXiyouScript() {
   if (!pendingPlan.length || !activation.scriptHash) {
     throw new Error("没有待提交的计划，请先生成配置计划");
   }
+  if (activation.state !== "prepared") {
+    throw new Error(`当前计划状态为 ${activation.state || "inactive"}，请重新生成配置计划后再写入`);
+  }
 
   // 严防内存覆盖：西游云仍在运行时拒绝写入
-  const isRunning = await isXiyouProcessesRunning();
+  const isRunning = await isXiyouProcessesRunning({ strict: true });
   if (isRunning) {
     throw new Error("西游云仍在运行中！为防止配置文件被西游云内存状态覆写，请先彻底退出西游云客户端后再执行安全写入。");
   }
 
-  const prefsPath = path.join(getClashConfigDir(), "shared_preferences.json");
+  const prefsPath = getXiyouPreferencesPath();
   if (!fsSync.existsSync(prefsPath)) throw new Error(`未找到西游云配置文件: ${prefsPath}`);
 
   const rawText = await fs.readFile(prefsPath, "utf8");
@@ -2074,20 +2088,24 @@ export async function commitPendingXiyouScript() {
   const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
   const backupPath = path.join(path.dirname(prefsPath), `shared_preferences_backup_abc_${stamp}.json`);
   await fs.copyFile(prefsPath, backupPath);
-  await atomicWrite(prefsPath, patchedText);
-
-  // 立即回读校验写入完整性
-  const verifyRaw = await fs.readFile(prefsPath, "utf8");
-  const inspect = inspectXiyouPreferences(verifyRaw);
-  if (!inspect.ok || inspect.currentId !== "abc-multi-proxy-script") {
-    throw new Error("写入后校验失败：当前激活脚本 ID 不符");
-  }
-  if (inspect.scriptHash !== activation.scriptHash) {
-    throw new Error("写入后校验失败：脚本内容 Hash 不一致");
+  try {
+    await atomicWrite(prefsPath, patchedText);
+    const verifyRaw = await fs.readFile(prefsPath, "utf8");
+    const inspect = inspectXiyouPreferences(verifyRaw);
+    if (!inspect.ok || inspect.currentId !== "abc-multi-proxy-script") {
+      throw new Error("当前激活脚本 ID 不符");
+    }
+    if (inspect.scriptHash !== activation.scriptHash) {
+      throw new Error("脚本内容 Hash 不一致");
+    }
+  } catch (error) {
+    await atomicWrite(prefsPath, rawText).catch(() => {});
+    throw new Error(`西游云配置写入校验失败，已恢复写入前备份：${error.message}`);
   }
 
   activation.state = "waiting_restart";
   activation.writtenAt = new Date().toISOString();
+  activation.backupPath = backupPath;
   activation.failure = "";
   netSettings.activation = activation;
   runtime.settings.networkSettings = netSettings;
@@ -2115,6 +2133,9 @@ export async function verifyPendingActivation() {
   if (!pendingPlan.length || !activation.scriptHash) {
     throw new Error("没有待验证的计划，请先生成计划");
   }
+  if (activation.state !== "waiting_restart" && activation.state !== "awaiting_save") {
+    throw new Error(`当前计划状态为 ${activation.state || "inactive"}，请先应用新脚本再验证`);
+  }
 
   // 1. 检查西游云核心进程
   const coreRunning = await isXiyouCoreRunning();
@@ -2123,16 +2144,17 @@ export async function verifyPendingActivation() {
   }
 
   // 2. 校验文件当前生效的脚本 Hash
-  const prefsPath = path.join(getClashConfigDir(), "shared_preferences.json");
-  if (fsSync.existsSync(prefsPath)) {
-    const rawText = await fs.readFile(prefsPath, "utf8");
-    const inspect = inspectXiyouPreferences(rawText);
-    if (!inspect.isActive || inspect.scriptHash !== activation.scriptHash) {
-      activation.state = "failed";
-      activation.failure = "西游云当前配置被其他脚本覆盖或 ID 不符";
-      await saveSettings();
-      throw new Error(`配置验证失败：${activation.failure}`);
-    }
+  const prefsPath = getXiyouPreferencesPath();
+  if (!fsSync.existsSync(prefsPath)) {
+    throw new Error(`配置验证失败：未找到西游云配置文件 ${prefsPath}`);
+  }
+  const rawText = await fs.readFile(prefsPath, "utf8");
+  const inspect = inspectXiyouPreferences(rawText);
+  if (!inspect.isActive || inspect.scriptHash !== activation.scriptHash) {
+    activation.state = "failed";
+    activation.failure = "西游云当前配置被其他脚本覆盖或 ID 不符";
+    await saveSettings();
+    throw new Error(`配置验证失败：${activation.failure}`);
   }
 
   // 3. 校验所有预计端口是否已开始监听
@@ -2166,24 +2188,49 @@ export async function verifyPendingActivation() {
   };
 
   const geoResults = {};
+  const verifiedPlan = [];
   for (const item of pendingPlan) {
     const geo = await probeProxyEgressGeo(item.port);
     geoResults[item.port] = geo;
 
-    if (!item.isCustomIsp && item.region && regionExpectedCode[item.region]) {
+    if (!geo.ok) {
+      activation.state = "failed";
+      activation.failure = `端口 ${item.port} (${item.name}) 无法确认真实出口：${geo.error || geo.errorType || "未知错误"}`;
+      await saveSettings();
+      throw new Error(activation.failure);
+    }
+
+    if (item.region && regionExpectedCode[item.region]) {
       const expCode = regionExpectedCode[item.region];
-      if (geo.ok && geo.countryCode && geo.countryCode !== expCode) {
+      if (!geo.countryCode || geo.countryCode === "GLOBAL" || geo.countryCode !== expCode) {
         activation.state = "failed";
         activation.failure = `端口 ${item.port} (${item.name}) 预期出口地区为 [${expCode}]，实测出口却为 [${geo.countryCode} · ${geo.country}]！已被硬核拦截防止串线。`;
         await saveSettings();
         throw new Error(activation.failure);
       }
     }
+
+    verifiedPlan.push({
+      ...item,
+      state: geo.countryCode === "GLOBAL" ? "active_geo_unknown" : "active",
+      verified: true,
+      listenerOk: true,
+      internetOk: true,
+      geoOk: geo.countryCode !== "GLOBAL",
+      latencyMs: geo.latencyMs || null,
+      realGeo: {
+        ip: geo.ip || "",
+        countryCode: geo.countryCode || "GLOBAL",
+        country: geo.country || "",
+        region: geo.region || "",
+        isp: geo.isp || "",
+      },
+    });
   }
 
   // 5. 全部严格通过，转正计划！
-  runtime.egressPlan = pendingPlan;
-  netSettings.egressPlan = pendingPlan;
+  runtime.egressPlan = verifiedPlan;
+  netSettings.egressPlan = verifiedPlan;
   netSettings.pendingEgressPlan = [];
   netSettings.lastSyncedAt = new Date().toISOString();
   activation.state = "active";
@@ -2202,6 +2249,54 @@ export async function verifyPendingActivation() {
     activation,
     geoResults,
     message: "✓ 所有独立端口与真实出口国家已 100% 校验通过，OAuth 与多账号通道已解锁！",
+  };
+}
+
+/**
+ * 恢复本次写入前的西游云偏好设置。调用前必须彻底退出西游云。
+ */
+export async function rollbackPendingXiyouScript() {
+  const netSettings = runtime.settings.networkSettings || {};
+  const activation = netSettings.activation || {};
+  const prefsPath = getXiyouPreferencesPath();
+  const backupPath = path.resolve(String(activation.backupPath || ""));
+  const prefsDir = path.dirname(path.resolve(prefsPath));
+  const backupDir = path.dirname(backupPath);
+
+  if (await isXiyouProcessesRunning({ strict: true })) {
+    throw new Error("西游云仍在运行中，请彻底退出西游云后再恢复备份");
+  }
+  if (!activation.backupPath || backupDir.toLowerCase() !== prefsDir.toLowerCase() || !path.basename(backupPath).startsWith("shared_preferences_backup_abc_")) {
+    throw new Error("没有可恢复的本次写入备份");
+  }
+  if (!fsSync.existsSync(backupPath)) {
+    throw new Error(`西游云备份文件不存在：${backupPath}`);
+  }
+
+  const backupText = await fs.readFile(backupPath, "utf8");
+  const backupInspect = inspectXiyouPreferences(backupText);
+  if (!backupInspect.ok) {
+    throw new Error(`西游云备份文件损坏：${backupInspect.error || "无法解析"}`);
+  }
+  await atomicWrite(prefsPath, backupText);
+
+  runtime.egressPlan = [];
+  netSettings.egressPlan = [];
+  netSettings.pendingEgressPlan = [];
+  netSettings.activation = {
+    ...defaultSettings().networkSettings.activation,
+    state: "inactive",
+    failure: "已恢复写入前备份，等待重新生成计划",
+  };
+  runtime.settings.networkSettings = netSettings;
+  await saveSettings();
+  addLog("network", `已恢复西游云写入前备份：${path.basename(backupPath)}`, "warn");
+
+  return {
+    ok: true,
+    state: "inactive",
+    preferencesPath: prefsPath,
+    message: "已恢复写入前的西游云配置。现在可以重新启动西游云，或重新生成独立端口计划。",
   };
 }
 
@@ -2240,133 +2335,13 @@ export async function requireVerifiedEgress(proxyPort = 0, { requireListening = 
   }
 
   if (requireListening) {
-    const isListening = await globalMihomoManager.canConnect(port, 400);
+    const isListening = await canConnect(port, 400);
     if (!isListening) {
-      throw new Error(`[多通道安全隔离门禁] 端口 ${port} 当前本地无服务监听，网络内核可能已停止，请重新激活网络！`);
+      throw new Error(`[多通道安全隔离门禁] 端口 ${port} 当前没有西游云 Listener 监听，请重新加载西游云覆写脚本！`);
     }
   }
 
   return { ok: true, egress: matched, proxyPort: port };
-}
-
-/**
- * V0.4：内置独立 Mihomo 事务化一键激活 (通过 mihomoRuntime 状态机原子执行)
- */
-export async function activateEmbeddedMihomoNetwork(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
-  const netSettings = { ...(runtime.settings.networkSettings || {}) };
-  if (forceUrl !== null) netSettings.subscriptionUrl = String(forceUrl).trim();
-  if (forceCustomIsp !== null) netSettings.customIspText = String(forceCustomIsp).trim();
-  if (forceCustomNodes !== null) netSettings.customNodes = forceCustomNodes;
-  netSettings.mode = "isolated";
-  netSettings.backend = "embedded-mihomo";
-
-  let nodesToApply = selectedNodes;
-  if (!nodesToApply || nodesToApply.length === 0) {
-    const fetched = await fetchSubscriptionCandidateNodes(netSettings.subscriptionUrl, netSettings.customIspText, null, netSettings.customNodes);
-    nodesToApply = fetched.nodes.filter((n) => n.recommended);
-  }
-  if (nodesToApply.length === 0) throw new Error("没有可激活的真实节点");
-
-  let relay = selectSingaporeRelay([...nodesToApply, ...runtime.candidateNodes]);
-  if (nodesToApply.some((node) => node.isCustomIsp) && !relay) {
-    try {
-      const fetched = await fetchSubscriptionCandidateNodes(
-        netSettings.subscriptionUrl,
-        netSettings.customIspText,
-        null,
-        netSettings.customNodes,
-      );
-      relay = selectSingaporeRelay(fetched.nodes);
-    } catch {}
-  }
-  if (nodesToApply.some((node) => node.isCustomIsp) && !relay) {
-    throw new Error("住宅 ISP 必须经过新加坡专线，但当前节点列表中没有找到新加坡 IEPL/IPLC/专线节点");
-  }
-
-  const previousPlan = netSettings.egressPlan || runtime.egressPlan || [];
-  const egressPlan = buildPlanFromSelectedNodes(nodesToApply, 7892, {
-    relayNodeName: relay?.name || "",
-    previousPlan,
-  });
-
-  // 1. 获取 Source of Truth (完整供应商配置底版，优先从已解析快照中读取)
-  let sourceText = runtime.sourceSnapshot?.sourceText || "";
-  if (!sourceText && netSettings.subscriptionUrl) {
-    try {
-      sourceText = await fetchSubscriptionRawText(netSettings.subscriptionUrl);
-    } catch {}
-  }
-  if (!sourceText) {
-    sourceText = findLocalRawProfileContent();
-  }
-  if (!sourceText) {
-    throw new Error("无法获取完整的源订阅配置 (Source of Truth)，请先输入有效订阅链接或扫描本地配置文件");
-  }
-
-  // 写入或刷新当前源快照
-  if (!runtime.sourceSnapshot || runtime.sourceSnapshot.sourceText !== sourceText) {
-    runtime.sourceSnapshot = {
-      id: `snap_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
-      sourceText,
-      sourceHash: crypto.createHash("sha256").update(sourceText, "utf8").digest("hex"),
-      createdAt: new Date().toISOString(),
-    };
-  }
-
-  // 端口占用预检：防止与其他系统服务或僵尸进程冲突
-  const portsToCheck = [...egressPlan.map((p) => Number(p.port)), 19090];
-  const occupiedPorts = [];
-  for (const p of portsToCheck) {
-    const isOccupied = await globalMihomoManager.canConnect(p, 250);
-    // 如果没有正在运行的内部 manager 实例，但端口已通，说明被外部进程占用
-    if (isOccupied && !globalMihomoManager.process) {
-      occupiedPorts.push(p);
-    }
-  }
-  if (occupiedPorts.length > 0) {
-    throw new Error(`端口冲突预检未通过：端口 [${occupiedPorts.join(", ")}] 已被其他外部程序占用，请先关闭冲突程序！`);
-  }
-
-  mihomoRuntime.init({ runtime, settings: runtime.settings });
-
-  // 2. 执行完整真事务激活
-  const res = await mihomoRuntime.activateTransaction({
-    sourceText,
-    egressPlan,
-    selectedNodes: nodesToApply,
-    relayNodeName: relay?.name || "",
-    controllerPort: 19090,
-  });
-
-  netSettings.egressPlan = res.egressPlan;
-  netSettings.pendingEgressPlan = [];
-  netSettings.selectedNodes = nodesToApply;
-  netSettings.relayNodeName = relay?.name || "";
-  runtime.settings.networkSettings = netSettings;
-  await saveSettings();
-
-  const activeCount = res.summary?.active ?? res.egressPlan.filter((p) => p.verified).length;
-  const requestedCount = res.summary?.requested ?? res.egressPlan.length;
-  const failedCount = res.summary?.failed ?? (requestedCount - activeCount);
-  const isPartial = res.state === "partial" || failedCount > 0;
-
-  const msg = isPartial
-    ? `⚠ 内置专向独立内核已启动 (部分可用)！${activeCount}/${requestedCount} 个独立通道已验证可用，${failedCount} 个通道暂未就绪`
-    : `✓ 内置专向独立内核已启动！${activeCount}/${requestedCount} 个独立通道已全部通过出口物理验证`;
-
-  return {
-    ok: true,
-    state: res.state || (isPartial ? "partial" : "active"),
-    generationId: res.generationId,
-    egressPlan: publicEgressPlan(res.egressPlan),
-    summary: res.summary || {
-      requested: requestedCount,
-      active: activeCount,
-      failed: failedCount,
-    },
-    configHash: res.configHash,
-    message: msg,
-  };
 }
 
 export async function applySelectedNodes(selectedNodes = [], forceUrl = null, forceCustomIsp = null, forceCustomNodes = null) {
@@ -2389,9 +2364,7 @@ export async function injectXiyouyunRelayScript(egressPlan = []) {
 }
 
 async function syncSubscriptionNodes(forceUrl = null, forceCustomIsp = null) {
-  const fetched = await fetchSubscriptionCandidateNodes(forceUrl, forceCustomIsp);
-  const recommended = fetched.nodes.filter((n) => n.recommended);
-  return prepareSelectedNodes(recommended, forceUrl, forceCustomIsp);
+  return fetchSubscriptionCandidateNodes(forceUrl, forceCustomIsp);
 }
 
 /**
@@ -2421,16 +2394,6 @@ async function getAvailableProxyNodes() {
   const result = (isActive && runtime.egressPlan && runtime.egressPlan.length > 0)
     ? publicEgressPlan(runtime.egressPlan)
     : [];
-
-  result.push({
-    id: "default",
-    name: "默认网络 / 规则分流",
-    protocol: "RULE",
-    country: "🌐",
-    port: activePort,
-    desc: "跟随西游云当前选中的节点",
-    display: `[RULE] 🌐 默认网络（跟随西游云当前生效节点） [端口 ${activePort}]`,
-  });
 
   return result;
 }
@@ -3044,7 +3007,7 @@ async function proxyState() {
   };
 }
 
-const CURRENT_VERSION = "0.4.1";
+const CURRENT_VERSION = "0.5.0";
 let cachedVersionCheck = { at: 0, result: null };
 
 async function checkAppVersion() {
@@ -3120,12 +3083,7 @@ async function dashboard() {
     },
     lastQuotaSweep: runtime.lastQuotaSweep || null,
     telemetry: globalTelemetryCollector.snapshot(),
-    mihomo: {
-      ...globalMihomoManager.getStatus(),
-      activationState: runtime.settings.networkSettings?.activation?.state || "inactive",
-      generationId: runtime.settings.networkSettings?.activation?.generationId || "",
-      expectedPorts: runtime.settings.networkSettings?.activation?.expectedPorts || [],
-    },
+    xiyou: await getXiyouRuntimeStatus(),
     logs: runtime.logs.slice(-40),
     errors: runtime.errors,
     paths: {
@@ -3346,6 +3304,9 @@ async function handleApi(request, response, url) {
         ...res.parsedNodes,
       ], 5);
       runtime.candidateNodes = scoredNodes;
+      runtime.settings.networkSettings.candidateNodes = scoredNodes;
+      runtime.settings.networkSettings.lastSyncedAt = new Date().toISOString();
+      await saveSettings();
       result = {
         ok: true,
         message: `成功登录官方账号 (${res.email}) 并拉取 ${res.parsedNodes.length} 个出海节点`,
@@ -3363,13 +3324,15 @@ async function handleApi(request, response, url) {
     }
   } else if (key === "POST /api/network/fetch-nodes") {
     const body = await readBody(request).catch(() => ({}));
-    result = await fetchSubscriptionCandidateNodes(body.subscriptionUrl || null, body.customIspText || null, body.accountCreds || null, body.customNodes || null);
+    result = await fetchSubscriptionCandidateNodes(
+      body.subscriptionUrl !== undefined ? body.subscriptionUrl : null,
+      body.customIspText !== undefined ? body.customIspText : null,
+      body.accountCreds || null,
+      body.customNodes !== undefined ? body.customNodes : null,
+    );
   } else if (key === "POST /api/network/prepare-plan" || key === "POST /api/network/apply-nodes") {
     const body = await readBody(request).catch(() => ({}));
     result = await prepareSelectedNodes(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
-  } else if (key === "POST /api/network/activate-embedded") {
-    const body = await readBody(request).catch(() => ({}));
-    result = await activateEmbeddedMihomoNetwork(body.selectedNodes || [], body.subscriptionUrl || null, body.customIspText || null, body.customNodes || null);
   } else if (key === "GET /api/network/status") {
     const netSettings = runtime.settings?.networkSettings || {};
     const plan = runtime.egressPlan || netSettings.egressPlan || [];
@@ -3378,10 +3341,7 @@ async function handleApi(request, response, url) {
     result = {
       ok: true,
       activation: netSettings.activation || { state: "inactive" },
-      mihomo: {
-        ...globalMihomoManager.getStatus(),
-        controllerAlive: await globalMihomoManager.canConnect(19090, 400).catch(() => false),
-      },
+      xiyou: await getXiyouRuntimeStatus(),
       egressPlan: publicEgressPlan(plan),
       summary: {
         requested: plan.length,
@@ -3397,31 +3357,23 @@ async function handleApi(request, response, url) {
       ok: true,
       activation: netSettings.activation || { state: "inactive" },
       egressPlan: publicEgressPlan(plan),
-      mihomo: {
-        ...globalMihomoManager.getStatus(),
-        controllerAlive: await globalMihomoManager.canConnect(19090, 400).catch(() => false),
-      },
-      sourceSnapshot: runtime.sourceSnapshot ? {
-        id: runtime.sourceSnapshot.id,
-        hash: runtime.sourceSnapshot.sourceHash,
-        createdAt: runtime.sourceSnapshot.createdAt,
-      } : null,
-      processLogs: globalMihomoManager.getProcessLogs(300),
-      lastActivationAttempt: runtime.lastActivationAttempt || null,
-      logs: runtime.logs.filter((l) => l.scope === "network" || l.scope === "mihomo").slice(-100),
+      xiyou: await getXiyouRuntimeStatus(),
+      logs: runtime.logs.filter((l) => l.scope === "network").slice(-100),
     };
-  } else if (key === "GET /api/mihomo/status") {
-    result = globalMihomoManager.getStatus();
-  } else if (key === "POST /api/mihomo/stop") {
-    await globalMihomoManager.stop();
-    result = { ok: true, status: "stopped" };
   } else if (key === "POST /api/network/commit-pending") {
     result = await commitPendingXiyouScript();
+  } else if (key === "POST /api/network/stage-hot-apply") {
+    result = await stagePendingXiyouHotApply();
+  } else if (key === "GET /api/network/activation-readiness") {
+    result = await getPendingActivationReadiness();
   } else if (key === "POST /api/network/verify-activation") {
     result = await verifyPendingActivation();
+  } else if (key === "POST /api/network/rollback-pending") {
+    result = await rollbackPendingXiyouScript();
   } else if (key === "POST /api/network/ping") {
     const body = await readBody(request).catch(() => ({}));
-    result = await pingNodesList(body.nodes || []);
+    const scope = body.scope === "candidates" ? "candidates" : (body.scope === "egress" ? "egress" : "auto");
+    result = await pingNodesList(body.nodes || [], { scope, persist: scope === "candidates" });
   } else if (key === "POST /api/network/sync") {
     const body = await readBody(request).catch(() => ({}));
     result = await syncSubscriptionNodes(body.subscriptionUrl || null, body.customIspText || null);
@@ -3859,13 +3811,6 @@ function startAntigravityWatcher() {
 
 export async function startServer() {
   await initialize();
-  mihomoRuntime.init({ runtime, settings: runtime.settings });
-  try {
-    await mihomoRuntime.recoverInterruptedMihomoActivation();
-    await mihomoRuntime.recoverEmbeddedMihomo();
-  } catch (err) {
-    addError("recovery", err);
-  }
   startAntigravityWatcher();
   const server = http.createServer((request, response) => requestHandler(request, response));
   await new Promise((resolve, reject) => {
@@ -3906,10 +3851,9 @@ export async function startServer() {
         addError("core", error);
       }
     }
-    try {
-      await globalMihomoManager.stop();
-    } catch {}
-    server.close();
+    server.close(() => {
+      if (isMain) process.exit(0);
+    });
   };
   process.once("SIGINT", () => void shutdown());
   process.once("SIGTERM", () => void shutdown());
